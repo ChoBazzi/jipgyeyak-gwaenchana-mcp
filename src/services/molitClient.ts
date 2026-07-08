@@ -133,33 +133,43 @@ function formatContractDate(year: string, month: string, day: string): string {
   return `${year.padStart(4, '0')}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
 }
 
+function assertMolitXmlSuccess(xml: string): void {
+  const resultCode = getXmlField(xml, ['resultCode']);
+  if (!resultCode || resultCode === '000') return;
+
+  const resultMsg = getXmlField(xml, ['resultMsg']);
+  throw new Error(`MOLIT API returned resultCode ${resultCode}${resultMsg ? `: ${resultMsg}` : ''}`);
+}
+
 function parseMolitXmlDeals(xml: string): Array<z.infer<typeof ParsedXmlDealSchema>> {
+  assertMolitXmlSuccess(xml);
+
   const itemMatches = xml.matchAll(/<item>([\s\S]*?)<\/item>/g);
   const parsedDeals: Array<z.infer<typeof ParsedXmlDealSchema>> = [];
 
   for (const match of itemMatches) {
     const itemXml = match[1] ?? '';
-    const year = getXmlField(itemXml, ['년']);
-    const month = getXmlField(itemXml, ['월']);
-    const day = getXmlField(itemXml, ['일']);
-    const depositManwon = parseNumberField(getXmlField(itemXml, ['보증금액', '보증금']));
-    const monthlyRentManwon = parseNumberField(getXmlField(itemXml, ['월세금액', '월세']));
-    const areaM2 = parseNumberField(getXmlField(itemXml, ['전용면적', '계약면적']));
+    const year = getXmlField(itemXml, ['dealYear', '년']);
+    const month = getXmlField(itemXml, ['dealMonth', '월']);
+    const day = getXmlField(itemXml, ['dealDay', '일']);
+    const depositManwon = parseNumberField(getXmlField(itemXml, ['deposit', '보증금액', '보증금']));
+    const monthlyRentManwon = parseNumberField(getXmlField(itemXml, ['monthlyRent', '월세금액', '월세']));
+    const areaM2 = parseNumberField(getXmlField(itemXml, ['excluUseAr', '전용면적', '계약면적']));
 
     if (!year || !month || !day || depositManwon === undefined || monthlyRentManwon === undefined || areaM2 === undefined) {
       continue;
     }
 
     const candidate = {
-      lawdCode: getXmlField(itemXml, ['지역코드']) ?? '',
-      regionName: getXmlField(itemXml, ['법정동']) ?? '',
+      lawdCode: getXmlField(itemXml, ['sggCd', '지역코드']) ?? '',
+      regionName: getXmlField(itemXml, ['umdNm', '법정동']) ?? '',
       contractDate: formatContractDate(year, month, day),
       depositKrw: depositManwon * 10_000,
       monthlyRentKrw: monthlyRentManwon * 10_000,
       areaM2,
-      floor: parseNumberField(getXmlField(itemXml, ['층'])),
-      builtYear: parseNumberField(getXmlField(itemXml, ['건축년도'])),
-      complexName: getXmlField(itemXml, ['아파트', '단지', '연립다세대', '단독다가구'])
+      floor: parseNumberField(getXmlField(itemXml, ['floor', '층'])),
+      builtYear: parseNumberField(getXmlField(itemXml, ['buildYear', '건축년도'])),
+      complexName: getXmlField(itemXml, ['aptNm', 'offiNm', 'mhouseNm', 'houseType', '아파트', '단지', '연립다세대', '단독다가구'])
     };
 
     const validated = ParsedXmlDealSchema.safeParse(candidate);
@@ -249,12 +259,13 @@ export class FallbackMolitRentClient implements MolitRentClient {
 
     try {
       return await this.liveClient.searchRentComparables(input);
-    } catch {
+    } catch (error) {
       const fallback = await this.seedClient.searchRentComparables(input);
+      const failureReason = error instanceof Error && error.message ? ` 실패 사유: ${error.message}` : '';
       return {
         ...fallback,
         dataNotice:
-          'live API 조회가 실패해 MVP seed data를 반환했습니다. 이 결과는 실시간 전월세 신고자료가 아닙니다.'
+          `live API 조회가 실패해 MVP seed data를 반환했습니다.${failureReason} 이 결과는 실시간 전월세 신고자료가 아닙니다.`
       };
     }
   }

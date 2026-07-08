@@ -103,6 +103,105 @@ describe('LiveMolitRentClient', () => {
       source: 'live'
     });
   });
+
+  it('parses live MOLIT XML items with English field names', async () => {
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          `<?xml version="1.0" encoding="UTF-8"?>
+          <response>
+            <header>
+              <resultCode>000</resultCode>
+              <resultMsg>OK</resultMsg>
+            </header>
+            <body>
+              <items>
+                <item>
+                  <aptNm>래미안원베일리</aptNm>
+                  <aptSeq>11680-1234</aptSeq>
+                  <buildYear>2023</buildYear>
+                  <dealDay>8</dealDay>
+                  <dealMonth>7</dealMonth>
+                  <dealYear>2026</dealYear>
+                  <deposit>50,000</deposit>
+                  <excluUseAr>84.97</excluUseAr>
+                  <floor>15</floor>
+                  <jibun>12-3</jibun>
+                  <monthlyRent>250</monthlyRent>
+                  <sggCd>11680</sggCd>
+                  <umdNm> 반포동 </umdNm>
+                </item>
+              </items>
+            </body>
+          </response>`,
+          { status: 200, headers: { 'content-type': 'application/xml' } }
+        )
+    );
+
+    const client = new LiveMolitRentClient({
+      apiKey: 'key',
+      baseUrl: 'https://apis.data.go.kr/1613000/'
+    });
+
+    const result = await client.searchRentComparables({
+      lawdCode: '11680',
+      dealYmdFrom: '202607',
+      dealYmdTo: '202607',
+      housingType: 'apartment',
+      limit: 20
+    });
+
+    expect(result.source).toBe('live');
+    expect(result.totalMatched).toBe(1);
+    expect(result.deals[0]).toMatchObject({
+      lawdCode: '11680',
+      regionName: '반포동',
+      housingType: 'apartment',
+      contractDate: '2026-07-08',
+      contractType: 'wolse',
+      depositKrw: 500000000,
+      monthlyRentKrw: 2500000,
+      areaM2: 84.97,
+      floor: 15,
+      builtYear: 2023,
+      complexName: '래미안원베일리',
+      source: 'live'
+    });
+  });
+
+  it('throws when MOLIT XML contains an error resultCode', async () => {
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          `<?xml version="1.0" encoding="UTF-8"?>
+          <response>
+            <header>
+              <resultCode>30</resultCode>
+              <resultMsg>SERVICE_KEY_IS_NOT_REGISTERED_ERROR</resultMsg>
+            </header>
+            <body>
+              <items />
+            </body>
+          </response>`,
+          { status: 200, headers: { 'content-type': 'application/xml' } }
+        )
+    );
+
+    const client = new LiveMolitRentClient({
+      apiKey: 'key',
+      baseUrl: 'https://apis.data.go.kr/1613000/'
+    });
+
+    await expect(
+      client.searchRentComparables({
+        lawdCode: '11680',
+        dealYmdFrom: '202607',
+        dealYmdTo: '202607',
+        housingType: 'apartment',
+        limit: 20
+      })
+    ).rejects.toThrow('MOLIT API returned resultCode 30');
+  });
 });
 
 describe('FallbackMolitRentClient', () => {
@@ -128,5 +227,42 @@ describe('FallbackMolitRentClient', () => {
     expect(result.dataNotice).toContain('live API 조회가 실패');
     expect(result.dataNotice).toContain('MVP seed data');
     expect(result.dataNotice).toContain('실시간 전월세 신고자료가 아닙니다');
+  });
+
+  it('marks seed fallback clearly when MOLIT returns an XML error resultCode', async () => {
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          `<?xml version="1.0" encoding="UTF-8"?>
+          <response>
+            <header>
+              <resultCode>03</resultCode>
+              <resultMsg>NODATA_ERROR</resultMsg>
+            </header>
+          </response>`,
+          { status: 200, headers: { 'content-type': 'application/xml' } }
+        )
+    );
+
+    const client = new FallbackMolitRentClient({
+      apiKey: 'key',
+      baseUrl: 'https://apis.data.go.kr/1613000'
+    });
+
+    const result = await client.searchRentComparables({
+      lawdCode: '11680',
+      dealYmdFrom: '202607',
+      dealYmdTo: '202607',
+      housingType: 'apartment',
+      areaM2: 60,
+      complexName: '역삼센트럴',
+      limit: 20
+    });
+
+    expect(result.source).toBe('seed');
+    expect(result.dataNotice).toContain('live API 조회가 실패');
+    expect(result.dataNotice).toContain('MVP seed data');
+    expect(result.dataNotice).toContain('실패 사유');
+    expect(result.dataNotice).toContain('resultCode 03');
   });
 });
