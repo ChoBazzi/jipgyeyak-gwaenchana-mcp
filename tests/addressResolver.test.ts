@@ -80,6 +80,75 @@ describe('resolveAddressRegion', () => {
     expect(result.dataNotice).toContain('도로명주소');
   });
 
+  it('prefers the Pangyo local intent when Juso matches Anyang Pangyo-ro instead', async () => {
+    process.env.JUSO_API_KEY = 'juso-key';
+    process.env.JUSO_API_BASE_URL = 'https://business.juso.go.kr/addrlink/addrLinkApi.do';
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            results: {
+              common: { errorCode: '0', errorMessage: '정상', totalCount: '1' },
+              juso: [
+                {
+                  roadAddr: '경기도 안양시 동안구 안양판교로 20 (관양동)',
+                  jibunAddr: '경기도 안양시 동안구 관양동 1505-29 신한데뷰오피스텔',
+                  bdNm: '신한데뷰오피스텔',
+                  siNm: '경기도',
+                  sggNm: '안양시 동안구',
+                  emdNm: '관양동',
+                  admCd: '4117310200',
+                  bdMgtSn: '4117310200115050029003477'
+                }
+              ]
+            }
+          }),
+          { status: 200 }
+        )
+    );
+
+    const result = await resolveAddressRegion('판교 오피스텔', 'officetel');
+
+    expect(result.source).toBe('local');
+    expect(result.lawdCode).toBe('41135');
+    expect(result.normalizedRegionName).toBe('경기도 성남시 분당구');
+    expect(result.dataNotice).toContain('지역 의도와 달라');
+  });
+
+  it('keeps a Juso candidate when the user explicitly enters Anyang Pangyo-ro', async () => {
+    process.env.JUSO_API_KEY = 'juso-key';
+    process.env.JUSO_API_BASE_URL = 'https://business.juso.go.kr/addrlink/addrLinkApi.do';
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            results: {
+              common: { errorCode: '0', errorMessage: '정상', totalCount: '1' },
+              juso: [
+                {
+                  roadAddr: '경기도 안양시 동안구 안양판교로 20 (관양동)',
+                  jibunAddr: '경기도 안양시 동안구 관양동 1505-29 신한데뷰오피스텔',
+                  bdNm: '신한데뷰오피스텔',
+                  siNm: '경기도',
+                  sggNm: '안양시 동안구',
+                  emdNm: '관양동',
+                  admCd: '4117310200',
+                  bdMgtSn: '4117310200115050029003477'
+                }
+              ]
+            }
+          }),
+          { status: 200 }
+        )
+    );
+
+    const result = await resolveAddressRegion('경기도 안양시 동안구 안양판교로 20', 'officetel');
+
+    expect(result.source).toBe('juso');
+    expect(result.lawdCode).toBe('41173');
+    expect(result.normalizedRegionName).toBe('경기도 안양시 동안구');
+  });
+
   it('falls back to local keyword mapping when Juso API key is missing', async () => {
     delete process.env.JUSO_API_KEY;
 

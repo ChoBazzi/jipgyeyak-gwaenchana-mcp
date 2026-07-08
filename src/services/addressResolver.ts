@@ -76,6 +76,17 @@ const LOCAL_REGION_INDEX: Array<RegionCandidate & { keywords: string[] }> = [
     keywords: ['마포구', '마포', '아현', '아현동', '공덕', '홍대']
   },
   {
+    regionName: '경기도 성남시 분당구',
+    lawdCode: '41135',
+    legalDongCode: '4113500000',
+    sido: '경기도',
+    sigungu: '성남시 분당구',
+    eupmyeondong: '',
+    confidence: 'medium',
+    matchReason: '경기 성남시 분당구 행정구역 키워드 매칭',
+    keywords: ['성남시분당구', '분당구', '판교', '판교역', '판교동', '백현동', '삼평동']
+  },
+  {
     regionName: '부산광역시 해운대구',
     lawdCode: '26350',
     legalDongCode: '2635000000',
@@ -108,6 +119,23 @@ function toCandidate(region: RegionCandidate & { keywords: string[] }, compactAd
   };
 }
 
+function findLocalCandidates(compactAddress: string): RegionCandidate[] {
+  return LOCAL_REGION_INDEX.filter((region) =>
+    region.keywords.some((keyword) => compactAddress.includes(keyword.replace(/\s/g, '')))
+  ).map((region) => toCandidate(region, compactAddress));
+}
+
+function shouldPreferLocalIntent(compactAddress: string, localCandidates: RegionCandidate[], jusoCandidates: RegionCandidate[]): boolean {
+  if (localCandidates.length === 0) return false;
+
+  const localLawdCodes = new Set(localCandidates.map((candidate) => candidate.lawdCode));
+  if (jusoCandidates.some((candidate) => localLawdCodes.has(candidate.lawdCode))) return false;
+
+  const hasPangyoIntent = compactAddress.includes('판교') && !compactAddress.includes('안양판교로');
+  const hasBundangCandidate = localCandidates.some((candidate) => candidate.lawdCode === '41135');
+  return hasPangyoIntent && hasBundangCandidate;
+}
+
 function joinNotices(...notices: Array<string | undefined>): string {
   return notices.filter((notice): notice is string => Boolean(notice)).join(' ');
 }
@@ -129,8 +157,26 @@ export async function resolveAddressRegion(
   const normalizedAddress = normalizeAddress(address);
   const compactAddress = normalizedAddress.replace(/\s/g, '');
   const jusoResult = await jusoClient.searchAddress(normalizedAddress);
+  const localCandidates = findLocalCandidates(compactAddress);
 
   if (jusoResult.candidates.length > 0) {
+    if (shouldPreferLocalIntent(compactAddress, localCandidates, jusoResult.candidates)) {
+      const primary = localCandidates[0] ?? null;
+
+      return {
+        normalizedAddress,
+        normalizedRegionName: primary?.regionName ?? null,
+        lawdCode: primary?.lawdCode ?? null,
+        candidates: localCandidates,
+        source: 'local',
+        dataNotice: joinNotices(
+          jusoResult.dataNotice,
+          '도로명주소 API 후보가 입력한 지역 의도와 달라 내장 행정구역 키워드 매핑을 우선했습니다. 더 정확한 비교를 위해 도로명주소나 지번주소를 함께 입력하세요.'
+        ),
+        disclaimer: CONTRACT_CHECK_DISCLAIMER
+      };
+    }
+
     const primary = jusoResult.candidates[0] ?? null;
 
     return {
@@ -144,17 +190,13 @@ export async function resolveAddressRegion(
     };
   }
 
-  const candidates = LOCAL_REGION_INDEX.filter((region) =>
-    region.keywords.some((keyword) => compactAddress.includes(keyword.replace(/\s/g, '')))
-  ).map((region) => toCandidate(region, compactAddress));
-
-  const primary = candidates[0] ?? null;
+  const primary = localCandidates[0] ?? null;
 
   return {
     normalizedAddress,
     normalizedRegionName: primary?.regionName ?? null,
     lawdCode: primary?.lawdCode ?? null,
-    candidates,
+    candidates: localCandidates,
     source: 'local',
     dataNotice: primary ? joinNotices(jusoResult.dataNotice, ADDRESS_MATCH_NOTICE) : joinNotices(jusoResult.dataNotice, ADDRESS_INSUFFICIENT_NOTICE),
     disclaimer: CONTRACT_CHECK_DISCLAIMER
