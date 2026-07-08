@@ -15,7 +15,7 @@ function buildSignals(comparison: ContractComparison): CheckSignal[] {
     signals.push({
       code: 'ADDRESS_MATCH_UNCERTAIN',
       label: '주소 매칭 확인 필요',
-      detail: 'seed lookup에서 법정동 후보를 찾지 못했습니다.',
+      detail: '입력 주소를 법정동 코드로 해석할 정보가 부족합니다.',
       suggestedVerification: '도로명주소, 지번주소, 건축물대장 주소가 서로 일치하는지 확인하세요.'
     });
   }
@@ -25,14 +25,14 @@ function buildSignals(comparison: ContractComparison): CheckSignal[] {
       code: 'LOW_SAMPLE_COUNT',
       label: '유사 거래 표본 수 부족',
       detail: `현재 조건에서 유사 표본은 ${comparison.sampleCount}건입니다.`,
-      suggestedVerification: '면적 허용 범위, 단지명 조건, 조회 기간을 조정하거나 live 신고자료로 다시 확인하세요.'
+      suggestedVerification: '면적 허용 범위, 단지명 조건, 조회 기간을 넓혀 공공데이터 신고자료를 다시 확인하세요.'
     });
   }
 
   const depositDiff = comparison.depositKrw.differencePercentFromMedian;
   if (depositDiff !== null && Math.abs(depositDiff) >= 25) {
     signals.push({
-      code: 'DEPOSIT_OUTSIDE_SEED_RANGE',
+      code: 'DEPOSIT_OUTSIDE_COMPARABLE_RANGE',
       label: '보증금 차이 확인 필요',
       detail: `입력 보증금이 유사 표본 중앙값 대비 ${depositDiff >= 0 ? '+' : ''}${depositDiff}%입니다.`,
       suggestedVerification: '관리비 포함 여부, 층/향/수리 상태, 권리관계, 보증보험 가능 여부를 분리해서 확인하세요.'
@@ -42,7 +42,7 @@ function buildSignals(comparison: ContractComparison): CheckSignal[] {
   const rentDiff = comparison.monthlyRentKrw.differencePercentFromMedian;
   if (comparison.monthlyRentKrw.input > 0 && rentDiff !== null && Math.abs(rentDiff) >= 25) {
     signals.push({
-      code: 'MONTHLY_RENT_OUTSIDE_SEED_RANGE',
+      code: 'MONTHLY_RENT_OUTSIDE_COMPARABLE_RANGE',
       label: '월세 차이 확인 필요',
       detail: `입력 월세가 유사 표본 중앙값 대비 ${rentDiff >= 0 ? '+' : ''}${rentDiff}%입니다.`,
       suggestedVerification: '관리비, 옵션, 단기계약 여부, 전월세 전환 조건이 비교 표본과 다른지 확인하세요.'

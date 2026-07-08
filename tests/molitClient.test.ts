@@ -169,6 +169,67 @@ describe('LiveMolitRentClient', () => {
     });
   });
 
+  it('parses detached multi-family live XML using totalFloorAr as area', async () => {
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          `<?xml version="1.0" encoding="UTF-8"?>
+          <response>
+            <header>
+              <resultCode>000</resultCode>
+              <resultMsg>OK</resultMsg>
+            </header>
+            <body>
+              <items>
+                <item>
+                  <buildYear>1996</buildYear>
+                  <dealDay>3</dealDay>
+                  <dealMonth>1</dealMonth>
+                  <dealYear>2024</dealYear>
+                  <deposit>22,000</deposit>
+                  <houseType>다가구</houseType>
+                  <monthlyRent>0</monthlyRent>
+                  <sggCd>11680</sggCd>
+                  <totalFloorAr>45</totalFloorAr>
+                  <umdNm>대치동</umdNm>
+                </item>
+              </items>
+            </body>
+          </response>`,
+          { status: 200, headers: { 'content-type': 'application/xml' } }
+        )
+    );
+
+    const client = new LiveMolitRentClient({
+      apiKey: 'key',
+      baseUrl: 'https://apis.data.go.kr/1613000/'
+    });
+
+    const result = await client.searchRentComparables({
+      lawdCode: '11680',
+      dealYmdFrom: '202401',
+      dealYmdTo: '202401',
+      housingType: 'detachedMultiFamily',
+      limit: 20
+    });
+
+    expect(result.source).toBe('live');
+    expect(result.totalMatched).toBe(1);
+    expect(result.deals[0]).toMatchObject({
+      lawdCode: '11680',
+      regionName: '대치동',
+      housingType: 'detachedMultiFamily',
+      contractDate: '2024-01-03',
+      contractType: 'jeonse',
+      depositKrw: 220000000,
+      monthlyRentKrw: 0,
+      areaM2: 45,
+      builtYear: 1996,
+      complexName: '다가구',
+      source: 'live'
+    });
+  });
+
   it('throws when MOLIT XML contains an error resultCode', async () => {
     globalThis.fetch = vi.fn(
       async () =>
@@ -205,7 +266,7 @@ describe('LiveMolitRentClient', () => {
 });
 
 describe('FallbackMolitRentClient', () => {
-  it('marks seed data clearly when live lookup fails', async () => {
+  it('returns unavailable information instead of seed data when live lookup fails', async () => {
     globalThis.fetch = vi.fn(async () => new Response('service error', { status: 500 }));
 
     const client = new FallbackMolitRentClient({
@@ -223,13 +284,14 @@ describe('FallbackMolitRentClient', () => {
       limit: 20
     });
 
-    expect(result.source).toBe('seed');
+    expect(result.source).toBe('unavailable');
+    expect(result.deals).toEqual([]);
     expect(result.dataNotice).toContain('live API 조회가 실패');
-    expect(result.dataNotice).toContain('MVP seed data');
-    expect(result.dataNotice).toContain('실시간 전월세 신고자료가 아닙니다');
+    expect(result.dataNotice).toContain('seed data는 반환하지 않으며');
+    expect(result.dataNotice).toContain('정보가 부족합니다');
   });
 
-  it('marks seed fallback clearly when MOLIT returns an XML error resultCode', async () => {
+  it('returns unavailable information when MOLIT returns an XML error resultCode', async () => {
     globalThis.fetch = vi.fn(
       async () =>
         new Response(
@@ -259,10 +321,29 @@ describe('FallbackMolitRentClient', () => {
       limit: 20
     });
 
-    expect(result.source).toBe('seed');
+    expect(result.source).toBe('unavailable');
+    expect(result.deals).toEqual([]);
     expect(result.dataNotice).toContain('live API 조회가 실패');
-    expect(result.dataNotice).toContain('MVP seed data');
+    expect(result.dataNotice).toContain('seed data는 반환하지 않으며');
     expect(result.dataNotice).toContain('실패 사유');
     expect(result.dataNotice).toContain('resultCode 03');
+  });
+
+  it('returns unavailable information when no API key is configured', async () => {
+    const client = new FallbackMolitRentClient({});
+
+    const result = await client.searchRentComparables({
+      lawdCode: '11680',
+      dealYmdFrom: '202607',
+      dealYmdTo: '202607',
+      housingType: 'apartment',
+      limit: 20
+    });
+
+    expect(result.source).toBe('unavailable');
+    expect(result.requiresLiveData).toBe(true);
+    expect(result.deals).toEqual([]);
+    expect(result.dataNotice).toContain('MOLIT_OPEN_DATA_API_KEY가 없어');
+    expect(result.dataNotice).toContain('seed data는 반환하지 않으며');
   });
 });

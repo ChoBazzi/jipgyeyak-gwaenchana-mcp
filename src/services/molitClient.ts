@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { SEED_RENT_DEALS } from '../data/seedRentDeals.js';
 import {
   CONTRACT_CHECK_DISCLAIMER,
   type ComparableSearchInput,
@@ -11,44 +10,15 @@ export interface MolitRentClient {
   searchRentComparables(input: ComparableSearchInput): Promise<ComparableSearchResult>;
 }
 
-function isDealInYmdRange(deal: RentDeal, from: string, to: string): boolean {
-  const ymd = deal.contractDate.replaceAll('-', '').slice(0, 6);
-  return ymd >= from && ymd <= to;
-}
-
-function filterSeedDeals(input: ComparableSearchInput): RentDeal[] {
-  const tolerance = input.areaToleranceM2 ?? 5;
-  const normalizedComplex = input.complexName?.replace(/\s/g, '').toLowerCase();
-
-  return SEED_RENT_DEALS.filter((deal) => {
-    if (deal.lawdCode !== input.lawdCode) return false;
-    if (deal.housingType !== input.housingType) return false;
-    if (!isDealInYmdRange(deal, input.dealYmdFrom, input.dealYmdTo)) return false;
-    if (input.areaM2 !== undefined && Math.abs(deal.areaM2 - input.areaM2) > tolerance) return false;
-    if (normalizedComplex) {
-      const dealComplex = deal.complexName?.replace(/\s/g, '').toLowerCase() ?? '';
-      if (!dealComplex.includes(normalizedComplex)) return false;
-    }
-    return true;
-  })
-    .sort((a, b) => b.contractDate.localeCompare(a.contractDate))
-    .slice(0, input.limit ?? 20);
-}
-
-export class SeedMolitRentClient implements MolitRentClient {
-  async searchRentComparables(input: ComparableSearchInput): Promise<ComparableSearchResult> {
-    const deals = filterSeedDeals(input);
-
-    return {
-      source: 'seed',
-      requiresLiveData: true,
-      dataNotice:
-        'MOLIT_OPEN_DATA_API_KEY 또는 live API 연결이 없어 MVP seed data를 반환했습니다. 이 결과는 실시간 전월세 신고자료가 아닙니다.',
-      deals,
-      totalMatched: deals.length,
-      disclaimer: CONTRACT_CHECK_DISCLAIMER
-    };
-  }
+function unavailableResult(message: string): ComparableSearchResult {
+  return {
+    source: 'unavailable',
+    requiresLiveData: true,
+    dataNotice: message,
+    deals: [],
+    totalMatched: 0,
+    disclaimer: CONTRACT_CHECK_DISCLAIMER
+  };
 }
 
 const HOUSING_TYPE_ENDPOINTS = {
@@ -154,7 +124,7 @@ function parseMolitXmlDeals(xml: string): Array<z.infer<typeof ParsedXmlDealSche
     const day = getXmlField(itemXml, ['dealDay', '일']);
     const depositManwon = parseNumberField(getXmlField(itemXml, ['deposit', '보증금액', '보증금']));
     const monthlyRentManwon = parseNumberField(getXmlField(itemXml, ['monthlyRent', '월세금액', '월세']));
-    const areaM2 = parseNumberField(getXmlField(itemXml, ['excluUseAr', '전용면적', '계약면적']));
+    const areaM2 = parseNumberField(getXmlField(itemXml, ['excluUseAr', 'totalFloorAr', '전용면적', '계약면적']));
 
     if (!year || !month || !day || depositManwon === undefined || monthlyRentManwon === undefined || areaM2 === undefined) {
       continue;
@@ -230,12 +200,16 @@ export class LiveMolitRentClient implements MolitRentClient {
     }
 
     const deals = filterLiveDeals(input, parsedDeals).sort((a, b) => b.contractDate.localeCompare(a.contractDate));
+    const limitedDeals = deals.slice(0, input.limit ?? 20);
 
     return {
       source: 'live',
       requiresLiveData: false,
-      dataNotice: '국토교통부 Open API XML 응답에서 지원 필드를 검증한 뒤 반환했습니다.',
-      deals: deals.slice(0, input.limit ?? 20),
+      dataNotice:
+        limitedDeals.length > 0
+          ? '국토교통부 Open API XML 응답에서 지원 필드를 검증한 뒤 반환했습니다.'
+          : '국토교통부 Open API 조회는 성공했지만 입력 조건에 맞는 유사 신고자료가 부족합니다. 법정동, 기간, 면적 또는 단지명 조건을 넓혀 다시 확인해 주세요.',
+      deals: limitedDeals,
       totalMatched: deals.length,
       disclaimer: CONTRACT_CHECK_DISCLAIMER
     };
@@ -243,7 +217,6 @@ export class LiveMolitRentClient implements MolitRentClient {
 }
 
 export class FallbackMolitRentClient implements MolitRentClient {
-  private readonly seedClient = new SeedMolitRentClient();
   private readonly liveClient?: LiveMolitRentClient;
 
   constructor(options: { apiKey?: string; baseUrl?: string }) {
@@ -254,19 +227,18 @@ export class FallbackMolitRentClient implements MolitRentClient {
 
   async searchRentComparables(input: ComparableSearchInput): Promise<ComparableSearchResult> {
     if (!this.liveClient) {
-      return this.seedClient.searchRentComparables(input);
+      return unavailableResult(
+        'MOLIT_OPEN_DATA_API_KEY가 없어 실시간 전월세 신고자료를 조회할 수 없습니다. seed data는 반환하지 않으며, 지금은 비교에 필요한 정보가 부족합니다.'
+      );
     }
 
     try {
       return await this.liveClient.searchRentComparables(input);
     } catch (error) {
-      const fallback = await this.seedClient.searchRentComparables(input);
       const failureReason = error instanceof Error && error.message ? ` 실패 사유: ${error.message}` : '';
-      return {
-        ...fallback,
-        dataNotice:
-          `live API 조회가 실패해 MVP seed data를 반환했습니다.${failureReason} 이 결과는 실시간 전월세 신고자료가 아닙니다.`
-      };
+      return unavailableResult(
+        `국토교통부 live API 조회가 실패했습니다.${failureReason} seed data는 반환하지 않으며, 지금은 비교에 필요한 정보가 부족합니다. 잠시 후 다시 시도해 주세요.`
+      );
     }
   }
 }

@@ -21,7 +21,7 @@ export interface AddressResolution {
   normalizedRegionName: string | null;
   lawdCode: string | null;
   candidates: RegionCandidate[];
-  source: 'seed';
+  source: 'local';
   dataNotice: string;
   disclaimer: string;
 }
@@ -39,7 +39,7 @@ export interface RentDeal {
   floor?: number;
   builtYear?: number;
   complexName?: string;
-  source: 'seed' | 'live';
+  source: 'live';
   sourceNotice: string;
 }
 
@@ -55,7 +55,7 @@ export interface ComparableSearchInput {
 }
 
 export interface ComparableSearchResult {
-  source: 'seed' | 'live';
+  source: 'live' | 'unavailable';
   requiresLiveData: boolean;
   dataNotice: string;
   deals: RentDeal[];
@@ -75,7 +75,7 @@ export interface ContractComparisonInput {
 
 export interface ContractComparison {
   addressResolution: AddressResolution;
-  comparableSource: 'seed' | 'live';
+  comparableSource: 'live' | 'unavailable';
   sampleCount: number;
   period: {
     from: string;

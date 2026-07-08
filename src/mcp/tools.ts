@@ -74,7 +74,7 @@ export const TOOL_DEFINITIONS = [
   {
     name: 'resolve_address_region',
     description:
-      '집계약괜찮아 주소/지역명을 법정동 후보와 lawdCode 앞 5자리로 해석합니다. MVP seed lookup이며 계약 전 확인 보조 정보와 disclaimer를 함께 반환합니다.',
+      '집계약괜찮아 주소/지역명을 법정동 후보와 lawdCode 앞 5자리로 해석합니다. 정보가 부족하면 후보를 만들지 않고 부족 사유와 disclaimer를 함께 반환합니다.',
     annotations: {
       title: '집계약괜찮아 주소 지역 해석',
       readOnlyHint: true,
@@ -86,7 +86,7 @@ export const TOOL_DEFINITIONS = [
   {
     name: 'search_rent_comparables',
     description:
-      '집계약괜찮아 유사 전월세 신고 사례를 조회합니다. API 키가 없거나 실패하면 seed data임을 명확히 표시하고 계약 전 확인 보조 disclaimer를 반환합니다.',
+      '집계약괜찮아 유사 전월세 신고 사례를 국토교통부 Open API에서 조회합니다. API 키가 없거나 실패하면 seed data 없이 정보 부족 안내와 disclaimer를 반환합니다.',
     annotations: {
       title: '집계약괜찮아 유사 전월세 사례 조회',
       readOnlyHint: true,

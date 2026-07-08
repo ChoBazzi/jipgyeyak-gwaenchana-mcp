@@ -6,7 +6,7 @@ import type { MolitRentClient } from './molitClient.js';
 
 function summarize(input: ContractComparisonInput, result: ContractComparison): string {
   if (result.sampleCount === 0) {
-    return 'seed/live comparable 표본이 없어 입력 조건과 유사 신고 사례를 비교하지 못했습니다. 주소와 면적 조건을 넓히거나 live API 연결 후 다시 확인하세요.';
+    return '공공데이터에서 입력 조건과 비교할 유사 신고자료가 부족해 계약 조건 비교를 수행하지 못했습니다. 주소, 기간, 면적 또는 단지명 조건을 더 넓혀 다시 확인해 주세요.';
   }
 
   const depositDiff = result.depositKrw.differencePercentFromMedian;
@@ -36,7 +36,7 @@ export async function compareContractTerms(
   if (!addressResolution.lawdCode) {
     return {
       addressResolution,
-      comparableSource: 'seed',
+      comparableSource: 'unavailable',
       sampleCount: 0,
       period: { from: toIsoDate(subtractMonths(now, monthsBack)), to: dealYmdToRangeEnd(to), monthsBack },
       depositKrw: {
@@ -55,7 +55,7 @@ export async function compareContractTerms(
         differenceFromMedian: null,
         differencePercentFromMedian: null
       },
-      comparisonSummary: '주소를 seed lookup에서 법정동 후보로 매칭하지 못해 유사 거래 비교를 수행하지 못했습니다.',
+      comparisonSummary: '주소를 법정동 코드로 해석할 정보가 부족해 유사 거래 비교를 수행하지 못했습니다.',
       comparables: [],
       dataNotice: addressResolution.dataNotice,
       disclaimer: CONTRACT_CHECK_DISCLAIMER
@@ -83,7 +83,7 @@ export async function compareContractTerms(
   const result: ContractComparison = {
     addressResolution,
     comparableSource: comparableResult.source,
-    sampleCount: comparableResult.totalMatched,
+    sampleCount: comparableResult.deals.length,
     period: { from: toIsoDate(subtractMonths(now, monthsBack)), to: dealYmdToRangeEnd(to), monthsBack },
     depositKrw: {
       input: input.depositKrw,

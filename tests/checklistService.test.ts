@@ -19,6 +19,8 @@ describe('generateQuestionChecklist', () => {
 
     expect(result.questionsForLessorOrAgent.join('\n')).toContain('보증보험');
     expect(result.questionsForLessorOrAgent.join('\n')).toContain('위반건축물');
+    expect(result.questionsForLessorOrAgent.join('\n')).toContain('쉽게 설명');
+    expect(result.questionsForLessorOrAgent.join('\n')).toContain('따로 내야 하는 돈');
     expect(result.documentsToReview).toContain('등기부등본');
     expect(result.disclaimer).toContain('계약 전 확인');
   });
