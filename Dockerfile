@@ -12,9 +12,11 @@ RUN npm run build
 FROM node:22-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
+ENV PORT=8080
+ENV MCP_HOST=0.0.0.0
 ENV MOLIT_OPEN_DATA_BASE_URL=https://apis.data.go.kr/1613000
 COPY package*.json ./
 RUN npm ci --omit=dev
 COPY --from=build /app/dist ./dist
-EXPOSE 3000
+EXPOSE 8080
 CMD ["node", "dist/http.js"]

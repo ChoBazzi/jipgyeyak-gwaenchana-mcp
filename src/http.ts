@@ -54,6 +54,6 @@ app.delete('/mcp', (_req, res) => {
   });
 });
 
-app.listen(config.port, () => {
-  console.log(`${getServerDisplayName()} Streamable HTTP endpoint listening on http://127.0.0.1:${config.port}/mcp`);
+app.listen(config.port, config.host, () => {
+  console.log(`${getServerDisplayName()} Streamable HTTP endpoint listening on http://${config.host}:${config.port}/mcp`);
 });

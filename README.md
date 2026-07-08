@@ -28,6 +28,8 @@ cp .env.example .env
 실제 API 키는 커밋하지 마세요. API 키가 없으면 실시간 신고자료를 조회하지 않으며, seed data 대신 정보 부족 안내를 반환합니다.
 
 ```bash
+PORT=8080
+MCP_HOST=0.0.0.0
 MOLIT_OPEN_DATA_API_KEY=
 MOLIT_OPEN_DATA_BASE_URL=https://apis.data.go.kr/1613000
 ```
@@ -54,6 +56,8 @@ docker build -t jipgyeyak-gwaenchana-mcp .
 Git 저장소 배포 방식에서는 저장소 URL과 브랜치만 연결하고, 배포 설정의 환경변수에 아래 값을 추가합니다.
 
 ```text
+PORT=8080
+MCP_HOST=0.0.0.0
 MOLIT_OPEN_DATA_API_KEY=<국토교통부 Open API 키>
 MOLIT_OPEN_DATA_BASE_URL=https://apis.data.go.kr/1613000
 ```
@@ -77,13 +81,13 @@ npm run dev:http
 Default endpoint:
 
 ```text
-http://127.0.0.1:3000/mcp
+http://127.0.0.1:8080/mcp
 ```
 
 Health check:
 
 ```text
-http://127.0.0.1:3000/health
+http://127.0.0.1:8080/health
 ```
 
 ## STDIO
