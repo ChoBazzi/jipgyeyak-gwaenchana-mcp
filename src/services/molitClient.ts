@@ -228,7 +228,7 @@ export class FallbackMolitRentClient implements MolitRentClient {
   async searchRentComparables(input: ComparableSearchInput): Promise<ComparableSearchResult> {
     if (!this.liveClient) {
       return unavailableResult(
-        'MOLIT_OPEN_DATA_API_KEY가 없어 실시간 전월세 신고자료를 조회할 수 없습니다. seed data는 반환하지 않으며, 지금은 비교에 필요한 정보가 부족합니다.'
+        'MOLIT_OPEN_DATA_API_KEY가 없어 실시간 신고자료를 조회할 수 없습니다. 지금은 비교에 필요한 정보가 부족합니다.'
       );
     }
 
@@ -237,7 +237,7 @@ export class FallbackMolitRentClient implements MolitRentClient {
     } catch (error) {
       const failureReason = error instanceof Error && error.message ? ` 실패 사유: ${error.message}` : '';
       return unavailableResult(
-        `국토교통부 live API 조회가 실패했습니다.${failureReason} seed data는 반환하지 않으며, 지금은 비교에 필요한 정보가 부족합니다. 잠시 후 다시 시도해 주세요.`
+        `공공데이터 조회가 실패했습니다.${failureReason} 지금은 비교에 필요한 정보가 부족합니다. 잠시 후 다시 시도해 주세요.`
       );
     }
   }

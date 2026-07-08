@@ -94,7 +94,7 @@ describe('compareContractTerms', () => {
     expect(result.depositKrw.median).toBe(290000000);
     expect(result.monthlyRentKrw.median).toBe(1975000);
     expect(result.comparisonSummary).toContain('최근 2건');
-    expect(result.dataNotice).not.toContain('seed');
+    expect(result.dataNotice).toContain('국토교통부 Open API XML 응답');
     expect(result.disclaimer).toContain('계약 전 확인을 돕는 정보');
   });
 

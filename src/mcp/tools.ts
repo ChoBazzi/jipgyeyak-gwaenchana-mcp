@@ -86,7 +86,7 @@ export const TOOL_DEFINITIONS = [
   {
     name: 'search_rent_comparables',
     description:
-      '집계약괜찮아 유사 전월세 신고 사례를 국토교통부 Open API에서 조회합니다. API 키가 없거나 실패하면 seed data 없이 정보 부족 안내와 disclaimer를 반환합니다.',
+      '집계약괜찮아 유사 전월세 신고 사례를 국토교통부 Open API에서 조회합니다. API 키가 없거나 조회가 실패하면 정보 부족 안내와 disclaimer를 반환합니다.',
     annotations: {
       title: '집계약괜찮아 유사 전월세 사례 조회',
       readOnlyHint: true,

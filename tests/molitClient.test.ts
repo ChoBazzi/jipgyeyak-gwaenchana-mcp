@@ -266,7 +266,7 @@ describe('LiveMolitRentClient', () => {
 });
 
 describe('FallbackMolitRentClient', () => {
-  it('returns unavailable information instead of seed data when live lookup fails', async () => {
+  it('returns unavailable information when live lookup fails', async () => {
     globalThis.fetch = vi.fn(async () => new Response('service error', { status: 500 }));
 
     const client = new FallbackMolitRentClient({
@@ -286,8 +286,7 @@ describe('FallbackMolitRentClient', () => {
 
     expect(result.source).toBe('unavailable');
     expect(result.deals).toEqual([]);
-    expect(result.dataNotice).toContain('live API 조회가 실패');
-    expect(result.dataNotice).toContain('seed data는 반환하지 않으며');
+    expect(result.dataNotice).toContain('공공데이터 조회가 실패했습니다');
     expect(result.dataNotice).toContain('정보가 부족합니다');
   });
 
@@ -323,8 +322,7 @@ describe('FallbackMolitRentClient', () => {
 
     expect(result.source).toBe('unavailable');
     expect(result.deals).toEqual([]);
-    expect(result.dataNotice).toContain('live API 조회가 실패');
-    expect(result.dataNotice).toContain('seed data는 반환하지 않으며');
+    expect(result.dataNotice).toContain('공공데이터 조회가 실패했습니다');
     expect(result.dataNotice).toContain('실패 사유');
     expect(result.dataNotice).toContain('resultCode 03');
   });
@@ -344,6 +342,7 @@ describe('FallbackMolitRentClient', () => {
     expect(result.requiresLiveData).toBe(true);
     expect(result.deals).toEqual([]);
     expect(result.dataNotice).toContain('MOLIT_OPEN_DATA_API_KEY가 없어');
-    expect(result.dataNotice).toContain('seed data는 반환하지 않으며');
+    expect(result.dataNotice).toContain('실시간 신고자료를 조회할 수 없습니다');
+    expect(result.dataNotice).toContain('정보가 부족합니다');
   });
 });

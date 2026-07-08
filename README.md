@@ -8,13 +8,13 @@
 - Local STDIO server
 - MOLIT Open Data live client
 - Juso road-name address lookup for address candidates and `lawdCode` extraction
-- No seed fallback: insufficient live data is reported explicitly
+- Insufficient live data is reported explicitly
 - PlayMCP-friendly tool descriptions and annotations
 
 ## Tools
 
 - `resolve_address_region`: 주소/지역명을 법정동 후보와 `lawdCode` 앞 5자리로 해석합니다.
-- `search_rent_comparables`: 유사 전월세 신고 사례를 조회합니다. API 키가 없거나 실패하면 seed data 없이 정보 부족 안내를 반환합니다.
+- `search_rent_comparables`: 유사 전월세 신고 사례를 조회합니다. API 키가 없거나 조회가 실패하면 정보 부족 안내를 반환합니다.
 - `compare_contract_terms`: 입력 계약 조건을 최근 유사 표본의 보증금/월세 중앙값 및 범위와 비교합니다.
 - `detect_precontract_red_flags`: 단정적 위험 판정 대신 `checkSignals`와 `itemsToVerify`를 반환합니다.
 - `generate_question_checklist`: 임대인/중개사 질문과 확인 서류 목록을 생성합니다.
@@ -26,7 +26,7 @@ npm install
 cp .env.example .env
 ```
 
-실제 API 키는 커밋하지 마세요. API 키가 없으면 실시간 신고자료를 조회하지 않으며, seed data 대신 정보 부족 안내를 반환합니다.
+실제 API 키는 커밋하지 마세요. API 키가 없으면 실시간 신고자료를 조회하지 않으며, 정보 부족 안내를 반환합니다.
 
 ```bash
 PORT=8080
@@ -116,4 +116,4 @@ node dist/stdio.js
 
 ## Data Notice
 
-The server does not return seed rent deals. If live MOLIT lookup cannot run or fails, `FallbackMolitRentClient` returns `source: "unavailable"`, an empty `deals` array, and a `dataNotice` that explains why the information is insufficient.
+If live MOLIT lookup cannot run or fails, `FallbackMolitRentClient` returns `source: "unavailable"`, an empty `deals` array, and a `dataNotice` that explains why the information is insufficient.

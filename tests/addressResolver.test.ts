@@ -38,7 +38,7 @@ describe('resolveAddressRegion', () => {
     expect(result.disclaimer).toContain('법률, 금융, 세무 또는 투자 조언이 아니며');
   });
 
-  it('resolves common Seoul area keywords without seed fixture data', async () => {
+  it('resolves common Seoul area keywords from local mapping', async () => {
     delete process.env.JUSO_API_KEY;
     await expect(resolveAddressRegion('성수에서 오피스텔 계약', 'officetel')).resolves.toMatchObject({ lawdCode: '11200' });
     await expect(resolveAddressRegion('종로구 빌라 월세', 'villa')).resolves.toMatchObject({ lawdCode: '11110' });
