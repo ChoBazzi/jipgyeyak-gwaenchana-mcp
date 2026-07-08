@@ -29,7 +29,7 @@ export async function compareContractTerms(
   now = new Date()
 ): Promise<ContractComparison> {
   const monthsBack = input.monthsBack ?? 12;
-  const addressResolution = resolveAddressRegion(input.address, input.housingType);
+  const addressResolution = await resolveAddressRegion(input.address, input.housingType);
   const to = toDealYmd(now);
   const from = toDealYmd(subtractMonths(now, monthsBack));
 

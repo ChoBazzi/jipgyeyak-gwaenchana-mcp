@@ -14,6 +14,12 @@ export interface RegionCandidate {
   eupmyeondong: string;
   confidence: 'high' | 'medium' | 'low';
   matchReason: string;
+  source?: 'local' | 'juso';
+  roadAddress?: string;
+  jibunAddress?: string;
+  buildingName?: string;
+  administrativeCode?: string;
+  buildingManagementNumber?: string;
 }
 
 export interface AddressResolution {
@@ -21,7 +27,7 @@ export interface AddressResolution {
   normalizedRegionName: string | null;
   lawdCode: string | null;
   candidates: RegionCandidate[];
-  source: 'local';
+  source: 'local' | 'juso';
   dataNotice: string;
   disclaimer: string;
 }

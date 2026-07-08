@@ -1,7 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import type { ComparableSearchResult } from '../src/domain/types.js';
 import { detectPrecontractCheckSignals } from '../src/services/checkService.js';
 import type { MolitRentClient } from '../src/services/molitClient.js';
+
+const originalJusoApiKey = process.env.JUSO_API_KEY;
 
 function mockRentClient(result: ComparableSearchResult): MolitRentClient {
   return {
@@ -11,8 +13,17 @@ function mockRentClient(result: ComparableSearchResult): MolitRentClient {
   };
 }
 
+afterEach(() => {
+  if (originalJusoApiKey === undefined) {
+    delete process.env.JUSO_API_KEY;
+  } else {
+    process.env.JUSO_API_KEY = originalJusoApiKey;
+  }
+});
+
 describe('detectPrecontractCheckSignals', () => {
   it('uses checkSignals and itemsToVerify instead of deterministic risk labels', async () => {
+    delete process.env.JUSO_API_KEY;
     const result = await detectPrecontractCheckSignals(
       {
         address: '서울특별시 강남구 역삼동',

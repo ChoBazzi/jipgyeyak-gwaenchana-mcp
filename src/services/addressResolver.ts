@@ -1,4 +1,6 @@
+import { loadConfig } from '../config.js';
 import { CONTRACT_CHECK_DISCLAIMER, type AddressResolution, type HousingType, type RegionCandidate } from '../domain/types.js';
+import { FallbackJusoAddressClient, type JusoAddressClient } from './jusoAddressClient.js';
 
 const ADDRESS_MATCH_NOTICE =
   '입력 주소를 내장 행정구역 키워드 매핑으로 해석했습니다. 도로명주소 API 또는 행정표준코드 API 검증 전까지는 후보 확인 용도로만 사용하세요.';
@@ -101,13 +103,46 @@ function toCandidate(region: RegionCandidate & { keywords: string[] }, compactAd
     sigungu: region.sigungu,
     eupmyeondong: matchedKeyword ?? region.eupmyeondong,
     confidence: matchedKeyword === region.sigungu ? 'medium' : 'high',
-    matchReason: matchedKeyword ? `${matchedKeyword} 행정구역 키워드 매칭` : region.matchReason
+    matchReason: matchedKeyword ? `${matchedKeyword} 행정구역 키워드 매칭` : region.matchReason,
+    source: 'local'
   };
 }
 
-export function resolveAddressRegion(address: string, _housingType?: HousingType): AddressResolution {
+function joinNotices(...notices: Array<string | undefined>): string {
+  return notices.filter((notice): notice is string => Boolean(notice)).join(' ');
+}
+
+function createJusoClientFromEnv(): JusoAddressClient {
+  const config = loadConfig();
+  return new FallbackJusoAddressClient({
+    apiKey: config.jusoApiKey,
+    baseUrl: config.jusoApiBaseUrl,
+    timeoutMs: config.jusoApiTimeoutMs
+  });
+}
+
+export async function resolveAddressRegion(
+  address: string,
+  _housingType?: HousingType,
+  jusoClient: JusoAddressClient = createJusoClientFromEnv()
+): Promise<AddressResolution> {
   const normalizedAddress = normalizeAddress(address);
   const compactAddress = normalizedAddress.replace(/\s/g, '');
+  const jusoResult = await jusoClient.searchAddress(normalizedAddress);
+
+  if (jusoResult.candidates.length > 0) {
+    const primary = jusoResult.candidates[0] ?? null;
+
+    return {
+      normalizedAddress,
+      normalizedRegionName: primary?.regionName ?? null,
+      lawdCode: primary?.lawdCode ?? null,
+      candidates: jusoResult.candidates,
+      source: 'juso',
+      dataNotice: jusoResult.dataNotice,
+      disclaimer: CONTRACT_CHECK_DISCLAIMER
+    };
+  }
 
   const candidates = LOCAL_REGION_INDEX.filter((region) =>
     region.keywords.some((keyword) => compactAddress.includes(keyword.replace(/\s/g, '')))
@@ -121,7 +156,7 @@ export function resolveAddressRegion(address: string, _housingType?: HousingType
     lawdCode: primary?.lawdCode ?? null,
     candidates,
     source: 'local',
-    dataNotice: primary ? ADDRESS_MATCH_NOTICE : ADDRESS_INSUFFICIENT_NOTICE,
+    dataNotice: primary ? joinNotices(jusoResult.dataNotice, ADDRESS_MATCH_NOTICE) : joinNotices(jusoResult.dataNotice, ADDRESS_INSUFFICIENT_NOTICE),
     disclaimer: CONTRACT_CHECK_DISCLAIMER
   };
 }

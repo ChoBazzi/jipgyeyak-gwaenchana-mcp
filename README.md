@@ -7,6 +7,7 @@
 - Streamable HTTP endpoint: `POST /mcp`
 - Local STDIO server
 - MOLIT Open Data live client
+- Juso road-name address lookup for address candidates and `lawdCode` extraction
 - No seed fallback: insufficient live data is reported explicitly
 - PlayMCP-friendly tool descriptions and annotations
 
@@ -32,7 +33,12 @@ PORT=8080
 MCP_HOST=0.0.0.0
 MOLIT_OPEN_DATA_API_KEY=
 MOLIT_OPEN_DATA_BASE_URL=https://apis.data.go.kr/1613000
+JUSO_API_KEY=
+JUSO_API_BASE_URL=https://business.juso.go.kr/addrlink/addrLinkApi.do
+JUSO_API_TIMEOUT_MS=3000
 ```
+
+`JUSO_API_KEY`는 도로명주소 주소기반산업지원서비스 검색 API 키입니다. `resolve_address_region`은 먼저 이 API로 사용자가 입력한 단지명/부분주소의 주소 후보를 찾고, 후보의 `bdMgtSn` 또는 `admCd` 앞 5자리에서 국토교통부 전월세 API 조회에 필요한 `lawdCode`를 추출합니다. 키가 없거나 조회가 실패하면 fake 후보를 만들지 않고 기존 내장 행정구역 키워드 매핑을 확인하며, 둘 다 실패하면 정보 부족 안내를 반환합니다.
 
 `MOLIT_OPEN_DATA_BASE_URL`은 개별 endpoint 전체 URL이 아니라 공공데이터포털 국토교통부 서비스 루트입니다. 기본값은 `https://apis.data.go.kr/1613000`이며, 코드는 `housingType`에 따라 아래 endpoint path를 붙여 호출합니다.
 
@@ -45,9 +51,11 @@ MOLIT_OPEN_DATA_BASE_URL=https://apis.data.go.kr/1613000
 
 live 요청은 `serviceKey`, `LAWD_CD`, `DEAL_YMD`, `pageNo`, `numOfRows` 파라미터를 사용합니다. 입력 기간 `dealYmdFrom`~`dealYmdTo`는 월 목록으로 펼쳐 각 월별로 호출합니다. API 키가 없거나 live 요청이 실패하면 결과에 `source: "unavailable"` 및 정보가 부족하다는 안내가 포함됩니다.
 
+역할을 구분하면, 도로명주소 API는 입력 주소/단지명을 행정구역 후보와 `lawdCode`로 해석하는 단계에 사용하고, 국토교통부 Open API는 해석된 `lawdCode`로 실제 전월세 신고 사례를 조회하는 단계에 사용합니다.
+
 현재 XML 파서는 국토부 Open API의 단순 `<item>` 목록 응답에서 계약일(`dealYear`/`년`, `dealMonth`/`월`, `dealDay`/`일`), 금액(`deposit`/`보증금액`, `monthlyRent`/`월세금액`), 면적(`excluUseAr`, `totalFloorAr`, `전용면적`), 지역(`sggCd`/`지역코드`, `umdNm`/`법정동`), 층, 건축년도, 단지/건물명 필드를 추출합니다. 중첩 구조나 네임스페이스가 필요한 응답으로 확장될 때는 이 파서의 테스트를 먼저 추가해 범위를 넓히세요.
 
-Docker 이미지는 API 키 없이 빌드합니다. PlayMCP/Kakao Cloud 배포 환경변수에 `MOLIT_OPEN_DATA_API_KEY`를 런타임 변수로 등록하세요.
+Docker 이미지는 API 키 없이 빌드합니다. PlayMCP/Kakao Cloud 배포 환경변수에 `MOLIT_OPEN_DATA_API_KEY`와 `JUSO_API_KEY`를 런타임 변수로 등록하세요.
 
 ```bash
 docker build -t jipgyeyak-gwaenchana-mcp .
@@ -60,6 +68,9 @@ PORT=8080
 MCP_HOST=0.0.0.0
 MOLIT_OPEN_DATA_API_KEY=<국토교통부 Open API 키>
 MOLIT_OPEN_DATA_BASE_URL=https://apis.data.go.kr/1613000
+JUSO_API_KEY=<도로명주소 API 키>
+JUSO_API_BASE_URL=https://business.juso.go.kr/addrlink/addrLinkApi.do
+JUSO_API_TIMEOUT_MS=3000
 ```
 
 ## Scripts

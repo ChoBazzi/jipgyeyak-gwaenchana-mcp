@@ -1,7 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ComparableSearchResult, RentDeal } from '../src/domain/types.js';
 import { compareContractTerms } from '../src/services/comparisonService.js';
 import type { MolitRentClient } from '../src/services/molitClient.js';
+
+const originalFetch = globalThis.fetch;
+const originalJusoApiKey = process.env.JUSO_API_KEY;
+const originalJusoApiBaseUrl = process.env.JUSO_API_BASE_URL;
 
 const liveDeals: RentDeal[] = [
   {
@@ -46,8 +50,24 @@ function mockRentClient(result: ComparableSearchResult): MolitRentClient {
   };
 }
 
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+  vi.restoreAllMocks();
+  if (originalJusoApiKey === undefined) {
+    delete process.env.JUSO_API_KEY;
+  } else {
+    process.env.JUSO_API_KEY = originalJusoApiKey;
+  }
+  if (originalJusoApiBaseUrl === undefined) {
+    delete process.env.JUSO_API_BASE_URL;
+  } else {
+    process.env.JUSO_API_BASE_URL = originalJusoApiBaseUrl;
+  }
+});
+
 describe('compareContractTerms', () => {
   it('compares contract terms against live comparables', async () => {
+    delete process.env.JUSO_API_KEY;
     const result = await compareContractTerms(
       {
         address: '서울특별시 강남구 역삼동',
@@ -78,7 +98,68 @@ describe('compareContractTerms', () => {
     expect(result.disclaimer).toContain('계약 전 확인을 돕는 정보');
   });
 
+  it('awaits Juso address resolution before searching rent comparables', async () => {
+    process.env.JUSO_API_KEY = 'juso-key';
+    process.env.JUSO_API_BASE_URL = 'https://business.juso.go.kr/addrlink/addrLinkApi.do';
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            results: {
+              common: { errorCode: '0', errorMessage: '정상', totalCount: '1' },
+              juso: [
+                {
+                  roadAddr: '경기도 부천시 원미구 조마루로 135',
+                  jibunAddr: '경기도 부천시 중동 1170',
+                  bdNm: '포도마을',
+                  siNm: '경기도',
+                  sggNm: '부천시',
+                  emdNm: '중동',
+                  admCd: '4119010900',
+                  bdMgtSn: '4119010900100011700000001'
+                }
+              ]
+            }
+          }),
+          { status: 200 }
+        )
+    );
+    const searchedLawdCodes: string[] = [];
+    const rentClient: MolitRentClient = {
+      async searchRentComparables(input) {
+        searchedLawdCodes.push(input.lawdCode);
+        return {
+          source: 'live',
+          requiresLiveData: false,
+          dataNotice: '국토교통부 Open API XML 응답에서 지원 필드를 검증한 뒤 반환했습니다.',
+          deals: [],
+          totalMatched: 0,
+          disclaimer: 'test disclaimer'
+        };
+      }
+    };
+
+    const result = await compareContractTerms(
+      {
+        address: '부천 포도마을',
+        housingType: 'apartment',
+        depositKrw: 200000000,
+        monthlyRentKrw: 1000000,
+        areaM2: 59,
+        monthsBack: 12,
+        complexName: '포도마을'
+      },
+      rentClient,
+      new Date('2026-07-08T00:00:00.000Z')
+    );
+
+    expect(result.addressResolution.source).toBe('juso');
+    expect(result.addressResolution.lawdCode).toBe('41190');
+    expect(searchedLawdCodes).toEqual(['41190']);
+  });
+
   it('returns an explicit no-match summary when address resolution fails', async () => {
+    delete process.env.JUSO_API_KEY;
     const result = await compareContractTerms(
       {
         address: '알 수 없는 주소',

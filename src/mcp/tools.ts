@@ -74,13 +74,13 @@ export const TOOL_DEFINITIONS = [
   {
     name: 'resolve_address_region',
     description:
-      '집계약괜찮아 주소/지역명을 법정동 후보와 lawdCode 앞 5자리로 해석합니다. 정보가 부족하면 후보를 만들지 않고 부족 사유와 disclaimer를 함께 반환합니다.',
+      '집계약괜찮아 주소/지역명을 도로명주소 API 또는 내장 키워드 매핑으로 법정동 후보와 lawdCode 앞 5자리로 해석합니다. 정보가 부족하면 후보를 만들지 않고 부족 사유와 disclaimer를 함께 반환합니다.',
     annotations: {
       title: '집계약괜찮아 주소 지역 해석',
       readOnlyHint: true,
       destructiveHint: false,
       idempotentHint: true,
-      openWorldHint: false
+      openWorldHint: true
     }
   },
   {
@@ -149,7 +149,7 @@ export function registerTools(server: McpServer, rentClient: MolitRentClient = c
       inputSchema: ResolveAddressRegionSchema.shape,
       annotations: TOOL_DEFINITIONS[0].annotations
     },
-    async (input) => jsonResult(resolveAddressRegion(input.address, input.housingType))
+    async (input) => jsonResult(await resolveAddressRegion(input.address, input.housingType))
   );
 
   server.registerTool(
