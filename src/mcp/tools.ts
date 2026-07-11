@@ -7,9 +7,11 @@ import { detectPrecontractCheckSignals } from '../services/checkService.js';
 import { generateQuestionChecklist } from '../services/checklistService.js';
 import { compareContractTerms } from '../services/comparisonService.js';
 import { FallbackMolitRentClient, type MolitRentClient } from '../services/molitClient.js';
+import { assertValidDealYmdRange, DEAL_YMD_PATTERN } from '../utils/date.js';
 
 const HousingTypeSchema = z.enum(['apartment', 'officetel', 'villa', 'detachedMultiFamily']);
 const ContractTypeSchema = z.enum(['jeonse', 'wolse']);
+const DealYmdSchema = z.string().regex(DEAL_YMD_PATTERN, '유효한 YYYYMM 형식이어야 합니다.');
 
 const ResolveAddressRegionSchema = z.object({
   address: z.string().min(1).describe('확인할 주소 또는 지역명'),
@@ -18,23 +20,30 @@ const ResolveAddressRegionSchema = z.object({
 
 const SearchRentComparablesSchema = z.object({
   lawdCode: z.string().regex(/^\d{5}$/).describe('법정동 코드 앞 5자리'),
-  dealYmdFrom: z.string().regex(/^\d{6}$/).describe('조회 시작 월 YYYYMM'),
-  dealYmdTo: z.string().regex(/^\d{6}$/).describe('조회 종료 월 YYYYMM'),
+  dealYmdFrom: DealYmdSchema.describe('조회 시작 월 YYYYMM'),
+  dealYmdTo: DealYmdSchema.describe('조회 종료 월 YYYYMM'),
   housingType: HousingTypeSchema.describe('주택 유형'),
-  areaM2: z.number().positive().optional().describe('전용/계약 면적 m2'),
+  contractType: ContractTypeSchema.optional().describe('계약 유형: jeonse 또는 wolse'),
+  areaM2: z.number().positive().optional().describe('사용자가 제공한 전용/계약 면적 m2'),
   areaToleranceM2: z.number().positive().optional().describe('면적 허용 오차 m2'),
-  complexName: z.string().optional().describe('단지명 또는 건물명'),
+  complexName: z
+    .string()
+    .optional()
+    .describe('사용자가 특정한 실제 단지명 또는 건물명. 지역명과 주택 유형만 있는 표현에는 입력하지 않음'),
   limit: z.number().int().positive().max(50).optional().describe('반환할 최대 사례 수')
 });
 
 const CompareContractTermsSchema = z.object({
   address: z.string().min(1).describe('확인할 주소 또는 지역명'),
   housingType: HousingTypeSchema.describe('주택 유형'),
-  depositKrw: z.number().nonnegative().describe('보증금 원화 금액'),
-  monthlyRentKrw: z.number().nonnegative().describe('월세 원화 금액'),
-  areaM2: z.number().positive().describe('전용/계약 면적 m2'),
+  depositKrw: z.number().nonnegative().describe('사용자가 제공한 보증금 원화 금액. 누락된 값을 추측하지 않음'),
+  monthlyRentKrw: z.number().nonnegative().describe('사용자가 제공한 월세 원화 금액. 전세는 0, 누락된 값은 추측하지 않음'),
+  areaM2: z.number().positive().describe('사용자가 제공한 전용/계약 면적 m2. 누락된 값을 추측하지 않음'),
   monthsBack: z.number().int().positive().max(36).optional().describe('최근 몇 개월을 볼지'),
-  complexName: z.string().optional().describe('단지명 또는 건물명')
+  complexName: z
+    .string()
+    .optional()
+    .describe('사용자가 특정한 실제 단지명 또는 건물명. 지역명과 주택 유형만 있는 표현에는 입력하지 않음')
 });
 
 const CheckSignalSchema = z.object({
@@ -86,7 +95,7 @@ export const TOOL_DEFINITIONS = [
   {
     name: 'search_rent_comparables',
     description:
-      '집계약괜찮아 유사 전월세 신고 사례를 국토교통부 Open API에서 조회합니다. API 키가 없거나 조회가 실패하면 정보 부족 안내와 disclaimer를 반환합니다.',
+      '집계약괜찮아 유사 전월세 신고 사례를 국토교통부 Open API에서 조회합니다. complexName은 특정 단지/건물명에만 사용하며, 지역명과 주택 유형만 있는 표현은 complexName에서 제외합니다. API 키가 없거나 조회가 실패하면 정보 부족 안내를 반환합니다.',
     annotations: {
       title: '집계약괜찮아 유사 전월세 사례 조회',
       readOnlyHint: true,
@@ -98,7 +107,7 @@ export const TOOL_DEFINITIONS = [
   {
     name: 'compare_contract_terms',
     description:
-      '집계약괜찮아 입력 계약 조건을 최근 유사 표본의 보증금/월세 중앙값 및 범위와 비교합니다. 법률/금융 조언이 아닌 계약 전 확인 보조 disclaimer를 포함합니다.',
+      '집계약괜찮아 입력 계약 조건을 최근 유사 표본의 보증금/월세 중앙값 및 범위와 비교합니다. 사용자가 주소, 주택 유형, 보증금, 월세, 면적을 모두 제공한 경우에만 호출하고 누락값을 추측하지 않습니다. 법률/금융 조언이 아닌 계약 전 확인 보조 disclaimer를 포함합니다.',
     annotations: {
       title: '집계약괜찮아 계약 조건 비교',
       readOnlyHint: true,
@@ -137,7 +146,8 @@ export function createRentClientFromEnv(): MolitRentClient {
   const config = loadConfig();
   return new FallbackMolitRentClient({
     apiKey: config.molitApiKey,
-    baseUrl: config.molitBaseUrl
+    baseUrl: config.molitBaseUrl,
+    timeoutMs: config.molitApiTimeoutMs
   });
 }
 
@@ -159,7 +169,11 @@ export function registerTools(server: McpServer, rentClient: MolitRentClient = c
       inputSchema: SearchRentComparablesSchema.shape,
       annotations: TOOL_DEFINITIONS[1].annotations
     },
-    async (input) => jsonResult(await rentClient.searchRentComparables(input as ComparableSearchInput))
+    async (input) => {
+      const parsedInput = SearchRentComparablesSchema.parse(input);
+      assertValidDealYmdRange(parsedInput.dealYmdFrom, parsedInput.dealYmdTo);
+      return jsonResult(await rentClient.searchRentComparables(parsedInput as ComparableSearchInput));
+    }
   );
 
   server.registerTool(

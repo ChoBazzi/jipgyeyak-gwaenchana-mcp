@@ -6,7 +6,11 @@ import type { MolitRentClient } from './molitClient.js';
 
 function summarize(input: ContractComparisonInput, result: ContractComparison): string {
   if (result.sampleCount === 0) {
-    return '공공데이터에서 입력 조건과 비교할 유사 신고자료가 부족해 계약 조건 비교를 수행하지 못했습니다. 주소, 기간, 면적 또는 단지명 조건을 더 넓혀 다시 확인해 주세요.';
+    if (result.comparableSource === 'unavailable') {
+      return '국토교통부 공공데이터를 조회하지 못해 계약 조건 비교를 수행하지 못했습니다. 잠시 후 다시 시도해 주세요.';
+    }
+
+    return '공공데이터 조회는 완료됐지만 입력 조건과 비교할 유사 신고자료가 없습니다. 기간, 면적 또는 단지명 조건을 넓혀 다시 확인해 주세요.';
   }
 
   const depositDiff = result.depositKrw.differencePercentFromMedian;
@@ -62,14 +66,21 @@ export async function compareContractTerms(
     };
   }
 
+  const primaryAddressCandidate = addressResolution.candidates[0];
+  const resolvedBuildingName =
+    addressResolution.source === 'juso' && primaryAddressCandidate?.confidence === 'high'
+      ? primaryAddressCandidate.buildingName
+      : undefined;
+
   const comparableResult = await rentClient.searchRentComparables({
     lawdCode: addressResolution.lawdCode,
     dealYmdFrom: from,
     dealYmdTo: to,
     housingType: input.housingType,
+    contractType: input.monthlyRentKrw > 0 ? 'wolse' : 'jeonse',
     areaM2: input.areaM2,
     areaToleranceM2: 7,
-    complexName: input.complexName,
+    complexName: input.complexName ?? resolvedBuildingName,
     limit: 20
   });
 

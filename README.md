@@ -33,6 +33,7 @@ PORT=8080
 MCP_HOST=0.0.0.0
 MOLIT_OPEN_DATA_API_KEY=
 MOLIT_OPEN_DATA_BASE_URL=https://apis.data.go.kr/1613000
+MOLIT_OPEN_DATA_TIMEOUT_MS=5000
 JUSO_API_KEY=
 JUSO_API_BASE_URL=https://business.juso.go.kr/addrlink/addrLinkApi.do
 JUSO_API_TIMEOUT_MS=3000
@@ -49,7 +50,9 @@ JUSO_API_TIMEOUT_MS=3000
 | `villa` | `/RTMSDataSvcRHRent/getRTMSDataSvcRHRent` |
 | `detachedMultiFamily` | `/RTMSDataSvcSHRent/getRTMSDataSvcSHRent` |
 
-live 요청은 `serviceKey`, `LAWD_CD`, `DEAL_YMD`, `pageNo`, `numOfRows` 파라미터를 사용합니다. 입력 기간 `dealYmdFrom`~`dealYmdTo`는 월 목록으로 펼쳐 각 월별로 호출합니다. API 키가 없거나 live 요청이 실패하면 결과에 `source: "unavailable"` 및 정보가 부족하다는 안내가 포함됩니다.
+live 요청은 `serviceKey`, `LAWD_CD`, `DEAL_YMD`, `pageNo`, `numOfRows` 파라미터를 사용합니다. 입력 기간 `dealYmdFrom`~`dealYmdTo`는 최신 월부터 펼치고 최대 3개월씩 병렬 조회합니다. 각 월은 응답의 `totalCount`와 `numOfRows`를 확인해 전체 페이지를 읽으며, 요청한 `limit`만큼 최근 표본을 확보하면 이전 월 조회를 중단합니다. 이때 `searchComplete: false`와 실제 조회한 월 수를 반환해 요청 기간 전체 건수와 혼동하지 않게 합니다. 비정상 응답의 무한 요청을 막기 위해 월별 최대 20페이지로 제한하며, 요청 타임아웃 기본값은 5초이고 `MOLIT_OPEN_DATA_TIMEOUT_MS`로 조정할 수 있습니다.
+
+단지명은 공백과 기호, `아파트`·`오피스텔` 같은 일반 주택 유형 표현을 정규화해 비교합니다. 따라서 `은마아파트`와 API의 `은마`, `대우마리나`와 `대우마리나1` 같은 표기 차이를 허용합니다. `contractType`이 주어지면 전세와 월세 신고 사례를 분리하며, `compare_contract_terms`는 입력 월세가 0원이면 전세, 0원보다 크면 월세 표본만 사용합니다. API 키가 없거나 live 요청이 실패하면 결과에 `source: "unavailable"`과 재시도 안내가 포함되고, 조회 성공 후 조건 일치 결과가 0건이면 별도의 조건 부족 안내가 포함됩니다.
 
 역할을 구분하면, 도로명주소 API는 입력 주소/단지명을 행정구역 후보와 `lawdCode`로 해석하는 단계에 사용하고, 국토교통부 Open API는 해석된 `lawdCode`로 실제 전월세 신고 사례를 조회하는 단계에 사용합니다.
 
@@ -68,6 +71,7 @@ PORT=8080
 MCP_HOST=0.0.0.0
 MOLIT_OPEN_DATA_API_KEY=<국토교통부 Open API 키>
 MOLIT_OPEN_DATA_BASE_URL=https://apis.data.go.kr/1613000
+MOLIT_OPEN_DATA_TIMEOUT_MS=5000
 JUSO_API_KEY=<도로명주소 API 키>
 JUSO_API_BASE_URL=https://business.juso.go.kr/addrlink/addrLinkApi.do
 JUSO_API_TIMEOUT_MS=3000

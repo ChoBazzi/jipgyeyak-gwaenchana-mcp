@@ -4,6 +4,7 @@ export const CONTRACT_CHECK_DISCLAIMER =
   '집계약괜찮아는 계약 전 확인을 돕는 정보만 제공합니다. 제공 결과는 법률, 금융, 세무 또는 투자 조언이 아니며, 실제 계약 전에는 등기부등본, 건축물대장, 중개대상물 확인설명서, 공적 신고자료와 전문가 확인을 별도로 진행해야 합니다.';
 
 export type HousingType = 'apartment' | 'officetel' | 'villa' | 'detachedMultiFamily';
+export type ContractType = 'jeonse' | 'wolse';
 
 export interface RegionCandidate {
   regionName: string;
@@ -38,7 +39,7 @@ export interface RentDeal {
   regionName: string;
   housingType: HousingType;
   contractDate: string;
-  contractType: 'jeonse' | 'wolse';
+  contractType: ContractType;
   depositKrw: number;
   monthlyRentKrw: number;
   areaM2: number;
@@ -54,6 +55,7 @@ export interface ComparableSearchInput {
   dealYmdFrom: string;
   dealYmdTo: string;
   housingType: HousingType;
+  contractType?: ContractType;
   areaM2?: number;
   areaToleranceM2?: number;
   complexName?: string;
@@ -63,6 +65,9 @@ export interface ComparableSearchInput {
 export interface ComparableSearchResult {
   source: 'live' | 'unavailable';
   requiresLiveData: boolean;
+  searchComplete?: boolean;
+  requestedMonthCount?: number;
+  searchedMonthCount?: number;
   dataNotice: string;
   deals: RentDeal[];
   totalMatched: number;

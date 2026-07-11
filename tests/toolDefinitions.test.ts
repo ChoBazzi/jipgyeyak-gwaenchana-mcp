@@ -15,4 +15,12 @@ describe('MCP tool definitions', () => {
       expect(tool.annotations.title).toContain('집계약괜찮아');
     }
   });
+
+  it('guides the agent not to invent missing contract values or generic complex names', () => {
+    const searchTool = TOOL_DEFINITIONS.find((tool) => tool.name === 'search_rent_comparables');
+    const compareTool = TOOL_DEFINITIONS.find((tool) => tool.name === 'compare_contract_terms');
+
+    expect(searchTool?.description).toContain('지역명과 주택 유형만');
+    expect(compareTool?.description).toContain('추측하지');
+  });
 });

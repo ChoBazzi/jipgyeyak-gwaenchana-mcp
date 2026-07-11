@@ -9,6 +9,247 @@ afterEach(() => {
 });
 
 describe('LiveMolitRentClient', () => {
+  it('uses an abort signal for every MOLIT request', async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      expect(init?.signal).toBeInstanceOf(AbortSignal);
+      return new Response('<response><header><resultCode>000</resultCode></header><body><items /></body></response>', {
+        status: 200
+      });
+    });
+    globalThis.fetch = fetchMock;
+
+    const client = new LiveMolitRentClient({
+      apiKey: 'key',
+      baseUrl: 'https://apis.data.go.kr/1613000/',
+      timeoutMs: 5000
+    });
+    await client.searchRentComparables({
+      lawdCode: '11680',
+      dealYmdFrom: '202607',
+      dealYmdTo: '202607',
+      housingType: 'apartment',
+      limit: 20
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a non-XML gateway payload instead of reporting a successful empty search', async () => {
+    globalThis.fetch = vi.fn(async () => new Response('<html><body>gateway error</body></html>', { status: 200 }));
+    const client = new LiveMolitRentClient({ apiKey: 'key', baseUrl: 'https://apis.data.go.kr/1613000/' });
+
+    await expect(
+      client.searchRentComparables({
+        lawdCode: '11680',
+        dealYmdFrom: '202607',
+        dealYmdTo: '202607',
+        housingType: 'apartment',
+        limit: 20
+      })
+    ).rejects.toThrow('invalid XML response');
+  });
+
+  it('follows pagination metadata before filtering and returning the requested limit', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const pageNo = new URL(String(input)).searchParams.get('pageNo');
+      const item =
+        pageNo === '1'
+          ? `<item><aptNm>다른단지</aptNm><dealYear>2026</dealYear><dealMonth>7</dealMonth><dealDay>1</dealDay><deposit>20,000</deposit><monthlyRent>0</monthlyRent><excluUseAr>76</excluUseAr><sggCd>11680</sggCd><umdNm>대치동</umdNm></item>`
+          : `<item><aptNm>은마</aptNm><dealYear>2026</dealYear><dealMonth>7</dealMonth><dealDay>2</dealDay><deposit>100,000</deposit><monthlyRent>0</monthlyRent><excluUseAr>76</excluUseAr><sggCd>11680</sggCd><umdNm>대치동</umdNm></item>`;
+
+      return new Response(
+        `<response><header><resultCode>000</resultCode></header><body><pageNo>${pageNo}</pageNo><numOfRows>1</numOfRows><totalCount>2</totalCount><items>${item}</items></body></response>`,
+        { status: 200 }
+      );
+    });
+    globalThis.fetch = fetchMock;
+
+    const client = new LiveMolitRentClient({
+      apiKey: 'key',
+      baseUrl: 'https://apis.data.go.kr/1613000/'
+    });
+    const result = await client.searchRentComparables({
+      lawdCode: '11680',
+      dealYmdFrom: '202607',
+      dealYmdTo: '202607',
+      housingType: 'apartment',
+      complexName: '은마',
+      limit: 1
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls.map(([url]) => new URL(String(url)).searchParams.get('pageNo'))).toEqual(['1', '2']);
+    expect(result.deals).toHaveLength(1);
+    expect(result.deals[0]?.complexName).toBe('은마');
+  });
+
+  it('rejects an empty page that appears before the reported total count is exhausted', async () => {
+    const requestedPages: string[] = [];
+    globalThis.fetch = vi.fn(async (input: string | URL | Request) => {
+      const pageNo = new URL(String(input)).searchParams.get('pageNo') ?? '';
+      requestedPages.push(pageNo);
+      const item =
+        pageNo === '1'
+          ? '<item><aptNm>다른단지</aptNm><dealYear>2026</dealYear><dealMonth>7</dealMonth><dealDay>1</dealDay><deposit>20,000</deposit><monthlyRent>0</monthlyRent><excluUseAr>76</excluUseAr><sggCd>11680</sggCd><umdNm>대치동</umdNm></item>'
+          : '';
+      return new Response(
+        `<response><header><resultCode>000</resultCode></header><body><pageNo>${pageNo}</pageNo><numOfRows>1</numOfRows><totalCount>3</totalCount><items>${item}</items></body></response>`,
+        { status: 200 }
+      );
+    });
+
+    const client = new LiveMolitRentClient({ apiKey: 'key', baseUrl: 'https://apis.data.go.kr/1613000/' });
+    await expect(
+      client.searchRentComparables({
+        lawdCode: '11680',
+        dealYmdFrom: '202607',
+        dealYmdTo: '202607',
+        housingType: 'apartment',
+        complexName: '은마',
+        limit: 20
+      })
+    ).rejects.toThrow('empty page before');
+    expect(requestedPages).toEqual(['1', '2']);
+  });
+
+  it('rejects invalid and reversed deal month ranges before making a request', async () => {
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock;
+    const client = new LiveMolitRentClient({ apiKey: 'key', baseUrl: 'https://apis.data.go.kr/1613000/' });
+
+    await expect(
+      client.searchRentComparables({
+        lawdCode: '11680',
+        dealYmdFrom: '202613',
+        dealYmdTo: '202613',
+        housingType: 'apartment'
+      })
+    ).rejects.toThrow('YYYYMM');
+    await expect(
+      client.searchRentComparables({
+        lawdCode: '11680',
+        dealYmdFrom: '202607',
+        dealYmdTo: '202606',
+        housingType: 'apartment'
+      })
+    ).rejects.toThrow('시작 월');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('searches newest months first and stops after enough recent comparables are found', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const dealYmd = new URL(String(input)).searchParams.get('DEAL_YMD') ?? '';
+      const year = dealYmd.slice(0, 4);
+      const month = String(Number(dealYmd.slice(4, 6)));
+      return new Response(
+        `<response><header><resultCode>000</resultCode></header><body><totalCount>1</totalCount><items><item><aptNm>은마</aptNm><dealYear>${year}</dealYear><dealMonth>${month}</dealMonth><dealDay>1</dealDay><deposit>100,000</deposit><monthlyRent>0</monthlyRent><excluUseAr>76</excluUseAr><sggCd>11680</sggCd><umdNm>대치동</umdNm></item></items></body></response>`,
+        { status: 200 }
+      );
+    });
+    globalThis.fetch = fetchMock;
+
+    const client = new LiveMolitRentClient({ apiKey: 'key', baseUrl: 'https://apis.data.go.kr/1613000/' });
+    const result = await client.searchRentComparables({
+      lawdCode: '11680',
+      dealYmdFrom: '202604',
+      dealYmdTo: '202607',
+      housingType: 'apartment',
+      complexName: '은마',
+      limit: 2
+    });
+
+    expect(fetchMock.mock.calls.map(([url]) => new URL(String(url)).searchParams.get('DEAL_YMD'))).toEqual([
+      '202607',
+      '202606',
+      '202605'
+    ]);
+    expect(result.deals.map((deal) => deal.contractDate)).toEqual(['2026-07-01', '2026-06-01']);
+    expect(result.searchComplete).toBe(false);
+    expect(result.requestedMonthCount).toBe(4);
+    expect(result.searchedMonthCount).toBe(3);
+    expect(result.dataNotice).toContain('최신 월부터');
+  });
+
+  it.each([
+    ['은마아파트', '은마'],
+    ['판교 오피스텔', '판교역 푸르지오시티'],
+    ['대우마리나', '대우마리나1']
+  ])('matches common complex-name variations: %s -> %s', async (requestedName, apiName) => {
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          `<response><header><resultCode>000</resultCode></header><body><pageNo>1</pageNo><numOfRows>1000</numOfRows><totalCount>1</totalCount><items><item><offiNm>${apiName}</offiNm><dealYear>2026</dealYear><dealMonth>7</dealMonth><dealDay>2</dealDay><deposit>20,000</deposit><monthlyRent>100</monthlyRent><excluUseAr>30</excluUseAr><sggCd>41135</sggCd><umdNm>백현동</umdNm></item></items></body></response>`,
+          { status: 200 }
+        )
+    );
+
+    const client = new LiveMolitRentClient({
+      apiKey: 'key',
+      baseUrl: 'https://apis.data.go.kr/1613000/'
+    });
+    const result = await client.searchRentComparables({
+      lawdCode: '41135',
+      dealYmdFrom: '202607',
+      dealYmdTo: '202607',
+      housingType: 'officetel',
+      complexName: requestedName,
+      limit: 20
+    });
+
+    expect(result.deals.map((deal) => deal.complexName)).toEqual([apiName]);
+  });
+
+  it('does not match a shorter, different complex name contained in the requested name', async () => {
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          `<response><header><resultCode>000</resultCode></header><body><totalCount>2</totalCount><items>
+            <item><aptNm>대우</aptNm><dealYear>2026</dealYear><dealMonth>7</dealMonth><dealDay>1</dealDay><deposit>30,000</deposit><monthlyRent>0</monthlyRent><excluUseAr>84</excluUseAr><sggCd>26350</sggCd><umdNm>우동</umdNm></item>
+            <item><aptNm>대우마리나1</aptNm><dealYear>2026</dealYear><dealMonth>7</dealMonth><dealDay>2</dealDay><deposit>50,000</deposit><monthlyRent>0</monthlyRent><excluUseAr>84</excluUseAr><sggCd>26350</sggCd><umdNm>우동</umdNm></item>
+          </items></body></response>`,
+          { status: 200 }
+        )
+    );
+
+    const client = new LiveMolitRentClient({ apiKey: 'key', baseUrl: 'https://apis.data.go.kr/1613000/' });
+    const result = await client.searchRentComparables({
+      lawdCode: '26350',
+      dealYmdFrom: '202607',
+      dealYmdTo: '202607',
+      housingType: 'apartment',
+      complexName: '대우마리나',
+      limit: 20
+    });
+
+    expect(result.deals.map((deal) => deal.complexName)).toEqual(['대우마리나1']);
+  });
+
+  it('filters jeonse and wolse deals separately when contractType is provided', async () => {
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          `<response><header><resultCode>000</resultCode></header><body><totalCount>2</totalCount><items>
+            <item><aptNm>은마</aptNm><dealYear>2026</dealYear><dealMonth>7</dealMonth><dealDay>1</dealDay><deposit>100,000</deposit><monthlyRent>0</monthlyRent><excluUseAr>76</excluUseAr><sggCd>11680</sggCd><umdNm>대치동</umdNm></item>
+            <item><aptNm>은마</aptNm><dealYear>2026</dealYear><dealMonth>7</dealMonth><dealDay>2</dealDay><deposit>10,000</deposit><monthlyRent>300</monthlyRent><excluUseAr>76</excluUseAr><sggCd>11680</sggCd><umdNm>대치동</umdNm></item>
+          </items></body></response>`,
+          { status: 200 }
+        )
+    );
+
+    const client = new LiveMolitRentClient({ apiKey: 'key', baseUrl: 'https://apis.data.go.kr/1613000/' });
+    const result = await client.searchRentComparables({
+      lawdCode: '11680',
+      dealYmdFrom: '202607',
+      dealYmdTo: '202607',
+      housingType: 'apartment',
+      contractType: 'jeonse',
+      limit: 20
+    });
+
+    expect(result.deals).toHaveLength(1);
+    expect(result.deals[0]?.contractType).toBe('jeonse');
+  });
+
   it('builds housing-type endpoint URLs from the service root and calls each requested month', async () => {
     const fetchMock = vi.fn(async () => new Response('<response><body><items /></body></response>', { status: 200 }));
     globalThis.fetch = fetchMock;
@@ -33,12 +274,12 @@ describe('LiveMolitRentClient', () => {
       '/1613000/RTMSDataSvcOffiRent/getRTMSDataSvcOffiRent',
       '/1613000/RTMSDataSvcOffiRent/getRTMSDataSvcOffiRent'
     ]);
-    expect(requestedUrls.map((url) => url.searchParams.get('DEAL_YMD'))).toEqual(['202605', '202606', '202607']);
+    expect(requestedUrls.map((url) => url.searchParams.get('DEAL_YMD'))).toEqual(['202607', '202606', '202605']);
     for (const url of requestedUrls) {
       expect(url.searchParams.get('serviceKey')).toBe('encoded-key');
       expect(url.searchParams.get('LAWD_CD')).toBe('11680');
       expect(url.searchParams.get('pageNo')).toBe('1');
-      expect(url.searchParams.get('numOfRows')).toBe('20');
+      expect(url.searchParams.get('numOfRows')).toBe('1000');
       expect(url.searchParams.has('DEAL_YMD_FROM')).toBe(false);
       expect(url.searchParams.has('DEAL_YMD_TO')).toBe(false);
       expect(url.searchParams.has('housingType')).toBe(false);
