@@ -141,6 +141,41 @@ function hasDistinctBuildingIdentity(candidate: RegionCandidate): boolean {
   return !administrativeNames.includes(buildingName);
 }
 
+function normalizedCandidateAddressBase(value: string, candidate: RegionCandidate): string {
+  const normalizedAddress = normalizeAddressForMatch(value);
+  const normalizedBuildingName = normalizeAddressForMatch(candidate.buildingName ?? '');
+  return normalizedBuildingName && normalizedAddress.endsWith(normalizedBuildingName)
+    ? normalizedAddress.slice(0, -normalizedBuildingName.length)
+    : normalizedAddress;
+}
+
+function addressIdentifiesCandidateProperty(address: string, candidate: RegionCandidate): boolean {
+  const requestedAddress = normalizeAddressForMatch(address);
+  const addressTokens = new Set(
+    address
+      .normalize('NFKC')
+      .toLowerCase()
+      .split(/[^\p{L}\p{N}]+/u)
+      .map((token) => token.trim())
+      .filter(Boolean)
+  );
+  const mostSpecificDistrict = (candidate.sigungu.split(/\s+/).filter(Boolean).at(-1) ?? '')
+    .normalize('NFKC')
+    .toLowerCase();
+  const hasCompleteAddressNumber = /(?:산)?\d+(?:-\d+)?$/u.test(requestedAddress);
+  if (
+    !hasCompleteAddressNumber ||
+    !mostSpecificDistrict ||
+    !addressTokens.has(mostSpecificDistrict)
+  ) {
+    return false;
+  }
+
+  return [candidate.roadAddress, candidate.jibunAddress]
+    .filter((value): value is string => Boolean(value))
+    .some((value) => normalizedCandidateAddressBase(value, candidate).endsWith(requestedAddress));
+}
+
 function candidatePropertyIdentity(candidate: RegionCandidate): string {
   const addressIdentity = candidate.jibunAddress ?? candidate.roadAddress;
   if (addressIdentity) return normalizeAddressForMatch(addressIdentity);
@@ -190,6 +225,15 @@ function candidateDecision(
     const selected = exactCandidates[0];
     return { selected, buildingName: selected?.buildingName, ambiguous: false };
   }
+
+  const exactPropertyCandidates = candidates.filter(
+    (candidate) => hasDistinctBuildingIdentity(candidate) && addressIdentifiesCandidateProperty(input.address, candidate)
+  );
+  if (exactPropertyCandidates.length === 1) {
+    const selected = exactPropertyCandidates[0];
+    return { selected, buildingName: selected?.buildingName, ambiguous: false };
+  }
+  if (exactPropertyCandidates.length > 1) return { ambiguous: true };
 
   const brandAssistedCandidate = candidates.length === 1 ? candidates[0] : undefined;
   if (

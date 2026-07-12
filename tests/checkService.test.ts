@@ -353,6 +353,43 @@ describe('detectPrecontractCheckSignals', () => {
     expect(result.screeningSummary).toContain('입력 월세 75만원이 높은지 낮은지 직접 비교할 수 없습니다');
   });
 
+  it('surfaces an area mismatch in the top-level summary', async () => {
+    mockVerifiedPropertyAddress();
+    const result = await detectPrecontractCheckSignals(
+      {
+        address: '서울특별시 강남구 테스트로 1',
+        housingType: 'officetel',
+        depositKrw: 70_000_000,
+        monthlyRentKrw: 750_000,
+        areaM2: 67,
+        complexName: '역삼센트럴'
+      },
+      mockRentClient({
+        source: 'live',
+        requiresLiveData: false,
+        status: 'NO_MATCHES',
+        reasonCode: 'NO_AREA_MATCH',
+        retryable: false,
+        filterStats: { raw: 100, afterContractType: 80, afterLegalDong: 20, afterComplexName: 10, afterArea: 0 },
+        nextActions: ['전용면적을 확인하세요.'],
+        searchComplete: true,
+        requestedMonthCount: 12,
+        searchedMonthCount: 12,
+        dataNotice: '면적 일치 자료 없음',
+        totalMatched: 0,
+        deals: [],
+        disclaimer: 'test disclaimer'
+      })
+    );
+
+    expect(result.comparison).toMatchObject({
+      comparisonScope: 'SAME_REPORTED_PROPERTY',
+      reasonCode: 'NO_AREA_MATCH'
+    });
+    expect(result.screeningSummary).toContain('요청한 면적 범위');
+    expect(result.screeningSummary).toContain('전용면적');
+  });
+
   it('does not treat legal-dong reference data as a contract-level screening result', async () => {
     delete process.env.JUSO_API_KEY;
     const result = await detectPrecontractCheckSignals(

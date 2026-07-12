@@ -300,6 +300,10 @@ function screeningSummary(
     return `동일 신고 건물·단지명의 유사 면적 월세 신고자료 ${comparison.sampleCount}건은 확인했지만,${completionNotice} 입력 보증금 ${formatKrw(comparison.depositKrw.input)}과 차이가 ${maximumDepositDifferencePercent}% 이내인 표본은 0건입니다. 따라서 입력 월세 ${formatKrw(comparison.monthlyRentKrw.input)}이 높은지 낮은지 직접 비교할 수 없습니다. 보증금 수준이 다른 월세를 단순 비교하지 않았으며, 비슷한 보증금 조건의 최근 사례와 관리비·옵션 차이를 추가로 확인해야 합니다.`;
   }
 
+  if (status === 'NO_MATCHES' && comparison.reasonCode === 'NO_AREA_MATCH') {
+    return comparison.comparisonSummary;
+  }
+
   switch (comparison.screeningOutcome) {
     case 'NO_ADDITIONAL_PRICE_SIGNAL_FOUND':
       return '도로명주소에서 확인한 건물·단지명의 공공데이터 가격 조건 비교에서는 추가 확인이 필요한 특이 신호가 확인되지 않았습니다. 이는 계약 안전이나 권리관계를 확인한 결과가 아니므로 등기부등본과 보증보험 가능 여부는 별도로 확인해야 합니다.';

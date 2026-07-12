@@ -1006,6 +1006,141 @@ describe('compareContractTerms', () => {
     });
   });
 
+  it('uses a unique exact parcel address as the reported property scope', async () => {
+    process.env.JUSO_API_KEY = 'juso-key';
+    process.env.JUSO_API_BASE_URL = 'https://business.juso.go.kr/addrlink/addrLinkApi.do';
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            results: {
+              common: { errorCode: '0', errorMessage: '정상', totalCount: '1' },
+              juso: [
+                {
+                  roadAddr: '경기도 성남시 분당구 판교역로 109 (백현동)',
+                  jibunAddr: '경기도 성남시 분당구 백현동 529 SK HUB 오피스텔',
+                  bdNm: 'SK HUB 오피스텔',
+                  siNm: '경기도',
+                  sggNm: '성남시 분당구',
+                  emdNm: '백현동',
+                  admCd: '4113511000',
+                  bdMgtSn: '4113511000105290000000001'
+                }
+              ]
+            }
+          }),
+          { status: 200 }
+        )
+    );
+    let searchedInput: ComparableSearchInput | undefined;
+    const rentClient: MolitRentClient = {
+      async searchRentComparables(input) {
+        searchedInput = input;
+        return {
+          source: 'live',
+          requiresLiveData: false,
+          status: 'NO_MATCHES',
+          reasonCode: 'NO_AREA_MATCH',
+          retryable: false,
+          filterStats: { raw: 100, afterContractType: 80, afterLegalDong: 20, afterComplexName: 10, afterArea: 0 },
+          nextActions: ['전용면적을 확인하세요.'],
+          searchComplete: true,
+          requestedMonthCount: 12,
+          searchedMonthCount: 12,
+          dataNotice: '면적 일치 자료 없음',
+          deals: [],
+          totalMatched: 0,
+          disclaimer: 'test disclaimer'
+        };
+      }
+    };
+
+    const result = await compareContractTerms(
+      {
+        address: '성남시 분당구 백현동 529',
+        housingType: 'officetel',
+        depositKrw: 70_000_000,
+        monthlyRentKrw: 750_000,
+        areaM2: 67
+      },
+      rentClient,
+      new Date('2026-07-08T00:00:00.000Z')
+    );
+
+    expect(searchedInput).toMatchObject({
+      lawdCode: '41135',
+      legalDongName: '백현동',
+      complexName: 'SK HUB 오피스텔'
+    });
+    expect(result).toMatchObject({
+      comparisonScope: 'SAME_REPORTED_PROPERTY',
+      resolvedBuildingName: 'SK HUB 오피스텔',
+      reasonCode: 'NO_AREA_MATCH'
+    });
+  });
+
+  it('does not treat a district name embedded in a road name as an explicit district', async () => {
+    process.env.JUSO_API_KEY = 'juso-key';
+    process.env.JUSO_API_BASE_URL = 'https://business.juso.go.kr/addrlink/addrLinkApi.do';
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            results: {
+              common: { errorCode: '0', errorMessage: '정상', totalCount: '1' },
+              juso: [
+                {
+                  roadAddr: '부산광역시 남구 남구청로 1 (대연동, 테스트타워)',
+                  jibunAddr: '부산광역시 남구 대연동 1 테스트타워',
+                  bdNm: '테스트타워',
+                  siNm: '부산광역시',
+                  sggNm: '남구',
+                  emdNm: '대연동',
+                  admCd: '2629010600',
+                  bdMgtSn: '2629010600100010000000001'
+                }
+              ]
+            }
+          }),
+          { status: 200 }
+        )
+    );
+    let searchedInput: ComparableSearchInput | undefined;
+    const rentClient: MolitRentClient = {
+      async searchRentComparables(input) {
+        searchedInput = input;
+        return {
+          source: 'live',
+          requiresLiveData: false,
+          status: 'NO_MATCHES',
+          reasonCode: 'NO_REPORTED_DEALS',
+          retryable: false,
+          searchComplete: true,
+          dataNotice: '신고자료 없음',
+          deals: [],
+          totalMatched: 0,
+          disclaimer: 'test disclaimer'
+        };
+      }
+    };
+
+    const result = await compareContractTerms(
+      {
+        address: '남구청로 1',
+        housingType: 'officetel',
+        depositKrw: 10_000_000,
+        monthlyRentKrw: 1_000_000,
+        areaM2: 30
+      },
+      rentClient,
+      new Date('2026-07-08T00:00:00.000Z')
+    );
+
+    expect(searchedInput?.complexName).toBeUndefined();
+    expect(result.comparisonScope).not.toBe('SAME_REPORTED_PROPERTY');
+    expect(result.resolvedBuildingName).toBeUndefined();
+  });
+
   it('labels a legal-dong comparison as reference data instead of a building screening result', async () => {
     delete process.env.JUSO_API_KEY;
     let searchedInput: ComparableSearchInput | undefined;
