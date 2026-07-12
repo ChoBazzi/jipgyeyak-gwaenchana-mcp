@@ -359,6 +359,122 @@ describe('LiveMolitRentClient', () => {
     expect(result.reasonCode).toBe('NO_COMPLEX_MATCH');
   });
 
+  it('matches the same numbered phase when Juso uses the 차 suffix', async () => {
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          `<response><header><resultCode>000</resultCode></header><body><totalCount>2</totalCount><items>
+            <item><aptNm>대우마리나1</aptNm><dealYear>2026</dealYear><dealMonth>7</dealMonth><dealDay>2</dealDay><deposit>50,000</deposit><monthlyRent>0</monthlyRent><excluUseAr>84</excluUseAr><sggCd>26350</sggCd><umdNm>우동</umdNm></item>
+            <item><aptNm>대우마리나3</aptNm><dealYear>2026</dealYear><dealMonth>7</dealMonth><dealDay>3</dealDay><deposit>30,000</deposit><monthlyRent>0</monthlyRent><excluUseAr>84</excluUseAr><sggCd>26350</sggCd><umdNm>우동</umdNm></item>
+          </items></body></response>`,
+          { status: 200 }
+        )
+    );
+
+    const client = new LiveMolitRentClient({ apiKey: 'key', baseUrl: 'https://apis.data.go.kr/1613000/' });
+    const result = await client.searchRentComparables({
+      lawdCode: '26350',
+      dealYmdFrom: '202607',
+      dealYmdTo: '202607',
+      housingType: 'apartment',
+      complexName: '대우마리나1차아파트',
+      limit: 20
+    });
+
+    expect(result.deals.map((deal) => deal.complexName)).toEqual(['대우마리나1']);
+  });
+
+  it('matches a Juso building name to a MOLIT name with a Korean location qualifier', async () => {
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          `<response><header><resultCode>000</resultCode></header><body><totalCount>1</totalCount><items>
+            <item><offiNm>판교역 SK HUB</offiNm><dealYear>2026</dealYear><dealMonth>7</dealMonth><dealDay>8</dealDay><deposit>25,700</deposit><monthlyRent>11</monthlyRent><excluUseAr>31.15</excluUseAr><sggCd>41135</sggCd><umdNm>백현동</umdNm></item>
+          </items></body></response>`,
+          { status: 200 }
+        )
+    );
+
+    const client = new LiveMolitRentClient({ apiKey: 'key', baseUrl: 'https://apis.data.go.kr/1613000/' });
+    const result = await client.searchRentComparables({
+      lawdCode: '41135',
+      dealYmdFrom: '202607',
+      dealYmdTo: '202607',
+      housingType: 'officetel',
+      contractType: 'wolse',
+      legalDongName: '백현동',
+      complexName: 'SK HUB 오피스텔',
+      limit: 5
+    });
+
+    expect(result).toMatchObject({ status: 'MATCHES_FOUND', reasonCode: 'MATCHES_FOUND' });
+    expect(result.deals).toHaveLength(1);
+    expect(result.deals[0]?.complexName).toBe('판교역 SK HUB');
+  });
+
+  it('counts byte-equivalent duplicate rental rows only once', async () => {
+    const duplicatedItem =
+      '<item><aptNm>해운대엑소디움</aptNm><contractTerm>26.02~28.02</contractTerm><contractType>신규</contractType><dealYear>2025</dealYear><dealMonth>12</dealMonth><dealDay>30</dealDay><deposit>80,000</deposit><monthlyRent>0</monthlyRent><excluUseAr>181.774</excluUseAr><floor>17</floor><buildYear>2009</buildYear><sggCd>26350</sggCd><umdNm>우동</umdNm></item>';
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          `<response><header><resultCode>000</resultCode></header><body><totalCount>2</totalCount><items>${duplicatedItem}${duplicatedItem}</items></body></response>`,
+          { status: 200 }
+        )
+    );
+    const client = new LiveMolitRentClient({ apiKey: 'key', baseUrl: 'https://apis.data.go.kr/1613000/' });
+
+    const result = await client.searchRentComparables({
+      lawdCode: '26350',
+      dealYmdFrom: '202512',
+      dealYmdTo: '202512',
+      housingType: 'apartment',
+      contractType: 'jeonse',
+      legalDongName: '우동',
+      complexName: '해운대엑소디움',
+      areaM2: 188,
+      areaToleranceM2: 7,
+      limit: 5
+    });
+
+    expect(result.deals).toHaveLength(1);
+    expect(result.totalMatched).toBe(1);
+    expect(result.filterStats?.raw).toBe(1);
+  });
+
+  it('counts byte-equivalent duplicate rental rows across pages only once', async () => {
+    const duplicatedItem =
+      '<item><aptNm>해운대엑소디움</aptNm><contractTerm>26.02~28.02</contractTerm><contractType>신규</contractType><dealYear>2025</dealYear><dealMonth>12</dealMonth><dealDay>30</dealDay><deposit>80,000</deposit><monthlyRent>0</monthlyRent><excluUseAr>181.774</excluUseAr><floor>17</floor><buildYear>2009</buildYear><sggCd>26350</sggCd><umdNm>우동</umdNm></item>';
+    const fetchMock = vi.fn(
+      async (input: string | URL | Request) =>
+        new Response(
+          `<response><header><resultCode>000</resultCode></header><body><pageNo>${new URL(String(input)).searchParams.get('pageNo')}</pageNo><numOfRows>1</numOfRows><totalCount>2</totalCount><items>${duplicatedItem}</items></body></response>`,
+          { status: 200 }
+        )
+    );
+    globalThis.fetch = fetchMock;
+    const client = new LiveMolitRentClient({ apiKey: 'key', baseUrl: 'https://apis.data.go.kr/1613000/' });
+
+    const result = await client.searchRentComparables({
+      lawdCode: '26350',
+      dealYmdFrom: '202512',
+      dealYmdTo: '202512',
+      housingType: 'apartment',
+      contractType: 'jeonse',
+      legalDongName: '우동',
+      complexName: '해운대엑소디움',
+      areaM2: 188,
+      areaToleranceM2: 7,
+      limit: 5
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.deals).toHaveLength(1);
+    expect(result.totalMatched).toBe(1);
+    expect(result.filterStats?.raw).toBe(1);
+    expect(result.searchComplete).toBe(true);
+  });
+
   it('filters jeonse and wolse deals separately when contractType is provided', async () => {
     globalThis.fetch = vi.fn(
       async () =>
@@ -434,6 +550,28 @@ describe('LiveMolitRentClient', () => {
       filterStats: { raw: 4, afterContractType: 3, afterComplexName: 2, afterArea: 0 }
     });
     expect(result.nextActions).toContain('면적 허용 범위를 넓혀 다시 조회하세요.');
+    expect(result.nextActions[0]).toContain('전용면적');
+  });
+
+  it('does not claim that a complex-name filter was applied when it was omitted', async () => {
+    globalThis.fetch = vi.fn(async () => new Response(filterStatsXml, { status: 200 }));
+    const client = new LiveMolitRentClient({ apiKey: 'key', baseUrl: 'https://apis.data.go.kr/1613000/' });
+
+    const result = await client.searchRentComparables({
+      lawdCode: '11680',
+      dealYmdFrom: '202607',
+      dealYmdTo: '202607',
+      housingType: 'apartment',
+      contractType: 'jeonse',
+      legalDongName: '대치동',
+      areaM2: 120,
+      areaToleranceM2: 2,
+      limit: 20
+    });
+
+    expect(result.reasonCode).toBe('NO_AREA_MATCH');
+    expect(result.dataNotice).toContain('법정동 조건까지 맞는 자료');
+    expect(result.dataNotice).not.toContain('단지명 조건');
   });
 
   it.each([

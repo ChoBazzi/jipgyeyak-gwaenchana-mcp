@@ -10,6 +10,7 @@ import {
   type SaleComparableSearchResult
 } from '../domain/types.js';
 import { assertValidDealYmdRange } from '../utils/date.js';
+import { reportedPropertyNamesMatch } from '../utils/propertyName.js';
 import { FallbackMolitSaleClient } from './molitSaleClient.js';
 
 export interface MolitRentClient {
@@ -189,7 +190,10 @@ function assertMolitXmlSuccess(xml: string): void {
   throw new MolitRequestError(message, isAuthError ? 'API_AUTH_ERROR' : 'API_RESPONSE_INVALID', !isAuthError);
 }
 
-function parseMolitXmlDeals(xml: string): Array<z.infer<typeof ParsedXmlDealSchema>> {
+function parseMolitXmlDeals(
+  xml: string,
+  seenItems = new Set<string>()
+): Array<z.infer<typeof ParsedXmlDealSchema>> {
   assertMolitXmlSuccess(xml);
 
   const itemMatches = xml.matchAll(/<item>([\s\S]*?)<\/item>/g);
@@ -197,6 +201,10 @@ function parseMolitXmlDeals(xml: string): Array<z.infer<typeof ParsedXmlDealSche
 
   for (const match of itemMatches) {
     const itemXml = match[1] ?? '';
+    const itemFingerprint = itemXml.replace(/>\s+</g, '><').trim();
+    if (seenItems.has(itemFingerprint)) continue;
+    seenItems.add(itemFingerprint);
+
     const year = getXmlField(itemXml, ['dealYear', '년']);
     const month = getXmlField(itemXml, ['dealMonth', '월']);
     const day = getXmlField(itemXml, ['dealDay', '일']);
@@ -237,36 +245,18 @@ function parseNonNegativeIntegerField(xml: string, name: string): number | undef
   return value !== undefined && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
 
-function parseMolitXmlPage(xml: string): {
+function parseMolitXmlPage(xml: string, seenItems?: Set<string>): {
   deals: Array<z.infer<typeof ParsedXmlDealSchema>>;
+  rawItemCount: number;
   totalCount?: number;
   numOfRows?: number;
 } {
   return {
-    deals: parseMolitXmlDeals(xml),
+    deals: parseMolitXmlDeals(xml, seenItems),
+    rawItemCount: [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].length,
     totalCount: parseNonNegativeIntegerField(xml, 'totalCount'),
     numOfRows: parsePositiveIntegerField(xml, 'numOfRows')
   };
-}
-
-const GENERIC_COMPLEX_NAME_TERMS = /아파트|오피스텔|주상복합|연립주택|다세대주택|단독주택|다가구주택|빌라/gu;
-
-function normalizeComplexName(value: string): string {
-  return value
-    .normalize('NFKC')
-    .toLowerCase()
-    .replace(GENERIC_COMPLEX_NAME_TERMS, '')
-    .replace(/[^\p{L}\p{N}]/gu, '');
-}
-
-function matchesComplexName(requestedName: string, actualName: string | undefined): boolean {
-  const requested = normalizeComplexName(requestedName);
-  if (!requested) return true;
-
-  const actual = actualName ? normalizeComplexName(actualName) : '';
-  if (!actual) return false;
-
-  return actual === requested;
 }
 
 function normalizeLegalDongName(value: string): string {
@@ -287,7 +277,7 @@ function filterLiveDeals(
       )
     : afterContractType;
   const afterComplexName = input.complexName
-    ? afterLegalDong.filter((deal) => matchesComplexName(input.complexName ?? '', deal.complexName))
+    ? afterLegalDong.filter((deal) => reportedPropertyNamesMatch(input.complexName ?? '', deal.complexName))
     : afterLegalDong;
   const afterArea =
     input.areaM2 !== undefined
@@ -324,13 +314,20 @@ function noMatchNextActions(reasonCode: ComparableReasonCode): string[] {
     case 'NO_COMPLEX_MATCH':
       return ['단지명을 빼거나 공식 단지명으로 바꿔 다시 조회하세요.'];
     case 'NO_AREA_MATCH':
-      return ['면적 허용 범위를 넓혀 다시 조회하세요.'];
+      return [
+        '아파트·오피스텔·연립다세대는 입력 면적이 공급면적이 아닌 전용면적인지 확인하세요.',
+        '면적 허용 범위를 넓혀 다시 조회하세요.'
+      ];
     default:
       return ['조회 기간을 넓혀 다시 조회하세요.'];
   }
 }
 
-function noMatchNotice(reasonCode: ComparableReasonCode, stats: ComparableFilterStats): string {
+function noMatchNotice(
+  input: ComparableSearchInput,
+  reasonCode: ComparableReasonCode,
+  stats: ComparableFilterStats
+): string {
   switch (reasonCode) {
     case 'NO_CONTRACT_TYPE_MATCH':
       return `국토교통부 Open API 조회는 성공했고 신고자료 ${stats.raw}건을 확인했지만 요청한 전세/월세 유형과 일치하는 자료가 없습니다.`;
@@ -338,8 +335,16 @@ function noMatchNotice(reasonCode: ComparableReasonCode, stats: ComparableFilter
       return `국토교통부 Open API 조회는 성공했고 계약 유형에 맞는 자료 ${stats.afterContractType}건을 확인했지만 요청한 법정동과 일치하는 자료가 없습니다.`;
     case 'NO_COMPLEX_MATCH':
       return `국토교통부 Open API 조회는 성공했고 계약 유형에 맞는 자료 ${stats.afterContractType}건을 확인했지만 요청한 단지명과 일치하는 자료가 없습니다.`;
-    case 'NO_AREA_MATCH':
-      return `국토교통부 Open API 조회는 성공했고 단지명 조건까지 맞는 자료 ${stats.afterComplexName}건을 확인했지만 요청 면적 범위와 일치하는 자료가 없습니다.`;
+    case 'NO_AREA_MATCH': {
+      const precedingFilter = input.complexName
+        ? `단지명 조건까지 맞는 자료 ${stats.afterComplexName}건`
+        : input.legalDongName
+          ? `법정동 조건까지 맞는 자료 ${stats.afterLegalDong}건`
+          : input.contractType
+            ? `계약 유형에 맞는 자료 ${stats.afterContractType}건`
+            : `신고자료 ${stats.raw}건`;
+      return `국토교통부 Open API 조회는 성공했고 ${precedingFilter}을 확인했지만 요청 면적 범위와 일치하는 자료가 없습니다.`;
+    }
     default:
       return '국토교통부 Open API의 월별 전체 페이지 조회는 성공했지만 조회 기간과 지역에 신고된 거래자료가 없습니다.';
   }
@@ -377,6 +382,7 @@ export class LiveMolitRentClient implements MolitRentClient {
     targetLimit: number
   ): Promise<{ deals: RentDeal[]; complete: boolean }> {
     const monthlyDeals: RentDeal[] = [];
+    const seenItems = new Set<string>();
 
     for (let pageNo = 1; pageNo <= MAX_MOLIT_PAGES_PER_MONTH; pageNo += 1) {
       const url = buildMolitUrl(this.options, input, dealYmd, pageNo);
@@ -394,7 +400,7 @@ export class LiveMolitRentClient implements MolitRentClient {
         );
       }
 
-      const page = parseMolitXmlPage(await response.text());
+      const page = parseMolitXmlPage(await response.text(), seenItems);
       monthlyDeals.push(
         ...page.deals.map(
           (deal, index): RentDeal => ({
@@ -409,17 +415,18 @@ export class LiveMolitRentClient implements MolitRentClient {
       );
 
       const effectivePageSize =
-        page.numOfRows ?? (page.totalCount !== undefined && page.deals.length > 0 ? page.deals.length : MOLIT_PAGE_SIZE);
+        page.numOfRows ?? (page.totalCount !== undefined && page.rawItemCount > 0 ? page.rawItemCount : MOLIT_PAGE_SIZE);
       const reachedReportedEnd = page.totalCount !== undefined && pageNo * effectivePageSize >= page.totalCount;
       const hasReportedMore = page.totalCount !== undefined && pageNo * effectivePageSize < page.totalCount;
-      if (page.deals.length === 0 && hasReportedMore) {
+      if (page.rawItemCount === 0 && hasReportedMore) {
         throw new MolitRequestError(
           `MOLIT API returned an empty page before totalCount was exhausted for ${dealYmd}`,
           'API_RESPONSE_INVALID',
           true
         );
       }
-      const reachedObservedEnd = page.deals.length === 0 || (page.totalCount === undefined && page.deals.length < effectivePageSize);
+      const reachedObservedEnd =
+        page.rawItemCount === 0 || (page.totalCount === undefined && page.rawItemCount < effectivePageSize);
 
       if (reachedReportedEnd || reachedObservedEnd) return { deals: monthlyDeals, complete: true };
       if (filterLiveDeals(input, monthlyDeals).deals.length >= targetLimit) {
@@ -513,7 +520,7 @@ export class LiveMolitRentClient implements MolitRentClient {
           ? searchComplete
             ? '국토교통부 Open API의 요청 기간 전체 페이지를 조회하고 지원 필드와 검색 조건을 검증한 뒤 반환했습니다.'
             : `국토교통부 Open API를 최신 월부터 ${searchedMonthCount}/${months.length}개월 조회해 최근 ${limitedDeals.length}건을 반환했습니다. 요청 기간 전체 건수는 아닙니다.`
-          : noMatchNotice(reasonCode, filtered.filterStats),
+          : noMatchNotice(input, reasonCode, filtered.filterStats),
       deals: limitedDeals,
       totalMatched: deals.length,
       disclaimer: CONTRACT_CHECK_DISCLAIMER

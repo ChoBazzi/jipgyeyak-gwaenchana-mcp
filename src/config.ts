@@ -1,15 +1,16 @@
 import 'dotenv/config';
 
 export const DEFAULT_MOLIT_OPEN_DATA_BASE_URL = 'https://apis.data.go.kr/1613000';
-export const DEFAULT_MOLIT_OPEN_DATA_TIMEOUT_MS = 5000;
-export const DEFAULT_MOLIT_OPEN_DATA_TOTAL_TIMEOUT_MS = 5000;
+export const DEFAULT_MOLIT_OPEN_DATA_TIMEOUT_MS = 10000;
+export const DEFAULT_MOLIT_OPEN_DATA_TOTAL_TIMEOUT_MS = 10000;
 export const DEFAULT_JUSO_API_BASE_URL = 'https://business.juso.go.kr/addrlink/addrLinkApi.do';
 export const DEFAULT_JUSO_API_TIMEOUT_MS = 3000;
-export const DEFAULT_CONTRACT_LOOKUP_TIMEOUT_MS = 8000;
+export const DEFAULT_CONTRACT_LOOKUP_TIMEOUT_MS = 15000;
 export const DEFAULT_MCP_ALLOWED_ORIGINS = ['https://playmcp.kakao.com'];
 export const DEFAULT_MCP_RATE_LIMIT_PER_MINUTE = 120;
 export const DEFAULT_MCP_MAX_CONCURRENT_REQUESTS = 16;
-const MAX_EXTERNAL_LOOKUP_TIMEOUT_MS = 10000;
+const MAX_MOLIT_LOOKUP_TIMEOUT_MS = 10000;
+const MAX_CONTRACT_LOOKUP_TIMEOUT_MS = 15000;
 const MAX_MCP_RATE_LIMIT_PER_MINUTE = 1000;
 const MAX_MCP_CONCURRENT_REQUESTS = 64;
 
@@ -54,10 +55,6 @@ function parseAllowedOrigins(value: string | undefined): string[] {
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const port = Number.parseInt(env.PORT ?? env.MCP_PORT ?? '8080', 10);
-  const molitApiTimeoutMs = Number.parseInt(
-    env.MOLIT_OPEN_DATA_TIMEOUT_MS ?? String(DEFAULT_MOLIT_OPEN_DATA_TIMEOUT_MS),
-    10
-  );
   const jusoApiTimeoutMs = Number.parseInt(env.JUSO_API_TIMEOUT_MS ?? String(DEFAULT_JUSO_API_TIMEOUT_MS), 10);
 
   return {
@@ -65,12 +62,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     host: env.MCP_HOST || '0.0.0.0',
     molitApiKey: env.MOLIT_OPEN_DATA_API_KEY || undefined,
     molitBaseUrl: env.MOLIT_OPEN_DATA_BASE_URL || DEFAULT_MOLIT_OPEN_DATA_BASE_URL,
-    molitApiTimeoutMs:
-      Number.isFinite(molitApiTimeoutMs) && molitApiTimeoutMs > 0 ? molitApiTimeoutMs : DEFAULT_MOLIT_OPEN_DATA_TIMEOUT_MS,
+    molitApiTimeoutMs: positiveInteger(
+      env.MOLIT_OPEN_DATA_TIMEOUT_MS,
+      DEFAULT_MOLIT_OPEN_DATA_TIMEOUT_MS,
+      MAX_MOLIT_LOOKUP_TIMEOUT_MS
+    ),
     molitTotalTimeoutMs: positiveInteger(
       env.MOLIT_OPEN_DATA_TOTAL_TIMEOUT_MS,
       DEFAULT_MOLIT_OPEN_DATA_TOTAL_TIMEOUT_MS,
-      MAX_EXTERNAL_LOOKUP_TIMEOUT_MS
+      MAX_MOLIT_LOOKUP_TIMEOUT_MS
     ),
     jusoApiKey: env.JUSO_API_KEY || undefined,
     jusoApiBaseUrl: env.JUSO_API_BASE_URL || DEFAULT_JUSO_API_BASE_URL,
@@ -78,7 +78,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     contractLookupTimeoutMs: positiveInteger(
       env.CONTRACT_LOOKUP_TIMEOUT_MS,
       DEFAULT_CONTRACT_LOOKUP_TIMEOUT_MS,
-      MAX_EXTERNAL_LOOKUP_TIMEOUT_MS
+      MAX_CONTRACT_LOOKUP_TIMEOUT_MS
     ),
     allowedOrigins: parseAllowedOrigins(env.MCP_ALLOWED_ORIGINS),
     mcpRateLimitPerMinute: positiveInteger(

@@ -8,6 +8,7 @@ import {
   type SaleDeal
 } from '../domain/types.js';
 import { assertValidDealYmdRange } from '../utils/date.js';
+import { reportedPropertyNamesMatch } from '../utils/propertyName.js';
 
 export interface MolitSaleClient {
   searchSaleComparables(input: SaleComparableSearchInput): Promise<SaleComparableSearchResult>;
@@ -37,7 +38,6 @@ const MAX_LIMIT = 20;
 const MONTH_CONCURRENCY = 3;
 const DEFAULT_REQUEST_TIMEOUT_MS = 5000;
 const DEFAULT_TOTAL_TIMEOUT_MS = 5000;
-const GENERIC_COMPLEX_TERMS = /아파트|오피스텔|주상복합|연립주택|다세대주택|단독주택|다가구주택|빌라/gu;
 
 const ParsedSaleDealSchema = z.object({
   lawdCode: z.string(),
@@ -49,6 +49,12 @@ const ParsedSaleDealSchema = z.object({
   builtYear: z.number().optional(),
   complexName: z.string().optional()
 });
+type ParsedSaleDeal = z.infer<typeof ParsedSaleDealSchema>;
+
+interface ParsedSaleRecord {
+  deal: ParsedSaleDeal;
+  transactionFingerprint: string;
+}
 
 function listMonths(from: string, to: string): string[] {
   const months: string[] = [];
@@ -126,11 +132,52 @@ function assertSuccessfulXml(xml: string): void {
   );
 }
 
-function parsePage(xml: string): { deals: Array<z.infer<typeof ParsedSaleDealSchema>>; totalCount?: number; rows?: number } {
+function isCancelledSaleItem(item: string): boolean {
+  const cancellationType = xmlField(item, ['cdealType', '해제여부'])?.toUpperCase();
+  const cancellationDate = xmlField(item, ['cdealDay', '해제사유발생일']);
+  return cancellationType === 'O' || cancellationType === 'Y' || Boolean(cancellationDate);
+}
+
+function publicSaleTransactionFingerprint(item: string): string {
+  return [
+    xmlField(item, ['sggCd', '지역코드']),
+    xmlField(item, ['umdNm', '법정동']),
+    xmlField(item, ['jibun', '지번']),
+    xmlField(item, ['aptNm', 'offiNm', 'mhouseNm', 'houseType', '아파트', '단지', '연립다세대']),
+    xmlField(item, ['aptDong', '동']),
+    xmlField(item, ['dealYear', '년']),
+    xmlField(item, ['dealMonth', '월']),
+    xmlField(item, ['dealDay', '일']),
+    xmlField(item, ['dealAmount', '거래금액']),
+    xmlField(item, ['excluUseAr', 'totalFloorAr', '전용면적', '연면적']),
+    xmlField(item, ['floor', '층']),
+    xmlField(item, ['buildYear', '건축년도'])
+  ].join('|');
+}
+
+function parsePage(xml: string): {
+  records: ParsedSaleRecord[];
+  cancelledTransactionFingerprints: string[];
+  rawItemCount: number;
+  totalCount?: number;
+  rows?: number;
+} {
   assertSuccessfulXml(xml);
-  const deals: Array<z.infer<typeof ParsedSaleDealSchema>> = [];
-  for (const match of xml.matchAll(/<item>([\s\S]*?)<\/item>/g)) {
-    const item = match[1] ?? '';
+  const records: ParsedSaleRecord[] = [];
+  const seenItems = new Set<string>();
+  const rawItems = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].map((match) => match[1] ?? '');
+  const cancelledTransactions = new Set(
+    rawItems.filter(isCancelledSaleItem).map(publicSaleTransactionFingerprint)
+  );
+
+  for (const item of rawItems) {
+    const transactionFingerprint = publicSaleTransactionFingerprint(item);
+    if (isCancelledSaleItem(item)) continue;
+
+    const itemFingerprint = item.replace(/>\s+</g, '><').trim();
+    if (seenItems.has(itemFingerprint)) continue;
+    seenItems.add(itemFingerprint);
+
     const year = xmlField(item, ['dealYear', '년']);
     const month = xmlField(item, ['dealMonth', '월']);
     const day = xmlField(item, ['dealDay', '일']);
@@ -161,31 +208,18 @@ function parsePage(xml: string): { deals: Array<z.infer<typeof ParsedSaleDealSch
         true
       );
     }
-    deals.push(candidate.data);
+    records.push({ deal: candidate.data, transactionFingerprint });
   }
 
   const totalCount = numberField(xmlField(xml, ['totalCount']));
   const rows = numberField(xmlField(xml, ['numOfRows']));
   return {
-    deals,
+    records,
+    cancelledTransactionFingerprints: [...cancelledTransactions],
+    rawItemCount: rawItems.length,
     totalCount: totalCount !== undefined && Number.isInteger(totalCount) && totalCount >= 0 ? totalCount : undefined,
     rows: rows !== undefined && Number.isInteger(rows) && rows > 0 ? rows : undefined
   };
-}
-
-function normalizeName(value: string): string {
-  return value
-    .normalize('NFKC')
-    .toLowerCase()
-    .replace(GENERIC_COMPLEX_TERMS, '')
-    .replace(/[^\p{L}\p{N}]/gu, '');
-}
-
-function matchesComplex(requestedName: string, actualName: string | undefined): boolean {
-  const requested = normalizeName(requestedName);
-  const actual = actualName ? normalizeName(actualName) : '';
-  if (!requested || !actual) return false;
-  return actual === requested;
 }
 
 function filterDeals(
@@ -197,7 +231,7 @@ function filterDeals(
     ? deals.filter((deal) => normalizeDong(deal.regionName) === normalizeDong(input.legalDongName ?? ''))
     : deals;
   const afterComplexName = input.complexName
-    ? afterLegalDong.filter((deal) => matchesComplex(input.complexName ?? '', deal.complexName))
+    ? afterLegalDong.filter((deal) => reportedPropertyNamesMatch(input.complexName ?? '', deal.complexName))
     : afterLegalDong;
   const tolerance = input.areaToleranceM2 ?? 5;
   const afterArea =
@@ -227,7 +261,12 @@ function noMatchReason(input: SaleComparableSearchInput, stats: ComparableFilter
 function nextActions(reasonCode: ComparableReasonCode, retryable = false): string[] {
   if (reasonCode === 'MATCHES_FOUND') return [];
   if (reasonCode === 'NO_COMPLEX_MATCH') return ['공식 건물명을 확인하고 매매 신고자료를 다시 조회하세요.'];
-  if (reasonCode === 'NO_AREA_MATCH') return ['비슷한 면적의 매매 신고자료가 있는지 조회 범위를 확인하세요.'];
+  if (reasonCode === 'NO_AREA_MATCH') {
+    return [
+      '아파트·오피스텔·연립다세대는 입력 면적이 공급면적이 아닌 전용면적인지 확인하세요.',
+      '비슷한 면적의 매매 신고자료가 있는지 조회 범위를 확인하세요.'
+    ];
+  }
   if (reasonCode === 'NO_LEGAL_DONG_MATCH') return ['법정동이 정확한지 확인하세요.'];
   if (reasonCode === 'API_KEY_MISSING') return ['서비스 관리자에게 공공데이터 API 설정을 확인해 달라고 요청하세요.'];
   if (reasonCode === 'API_AUTH_ERROR') return ['해당 매매 API의 활용신청 승인 상태를 확인하세요.'];
@@ -254,10 +293,10 @@ export class LiveMolitSaleClient implements MolitSaleClient {
   private async fetchMonth(
     input: SaleComparableSearchInput,
     dealYmd: string,
-    deadlineAtMs: number,
-    targetLimit: number
+    deadlineAtMs: number
   ): Promise<{ deals: SaleDeal[]; complete: boolean }> {
-    const deals: SaleDeal[] = [];
+    const records: Array<{ deal: SaleDeal; transactionFingerprint: string }> = [];
+    const cancelledTransactions = new Set<string>();
     for (let pageNo = 1; pageNo <= MAX_PAGES_PER_MONTH; pageNo += 1) {
       const response = await fetch(buildUrl(this.options, input, dealYmd, pageNo), {
         headers: { Accept: 'application/xml, text/xml;q=0.9, */*;q=0.8' },
@@ -273,19 +312,23 @@ export class LiveMolitSaleClient implements MolitSaleClient {
       }
 
       const page = parsePage(await response.text());
-      deals.push(
-        ...page.deals.map((deal, index) => ({
-          ...deal,
-          id: `live-sale-${input.housingType}-${input.lawdCode}-${dealYmd}-${pageNo}-${index}`,
-          lawdCode: deal.lawdCode || input.lawdCode,
-          housingType: input.housingType,
-          source: 'live' as const
+      page.cancelledTransactionFingerprints.forEach((fingerprint) => cancelledTransactions.add(fingerprint));
+      records.push(
+        ...page.records.map(({ deal, transactionFingerprint }, index) => ({
+          transactionFingerprint,
+          deal: {
+            ...deal,
+            id: `live-sale-${input.housingType}-${input.lawdCode}-${dealYmd}-${pageNo}-${index}`,
+            lawdCode: deal.lawdCode || input.lawdCode,
+            housingType: input.housingType,
+            source: 'live' as const
+          }
         }))
       );
-      const pageSize = page.rows ?? (page.totalCount !== undefined && page.deals.length > 0 ? page.deals.length : PAGE_SIZE);
+      const pageSize = page.rows ?? (page.totalCount !== undefined && page.rawItemCount > 0 ? page.rawItemCount : PAGE_SIZE);
       const pageShouldContainData =
         page.totalCount !== undefined && (pageNo - 1) * pageSize < page.totalCount;
-      if (page.deals.length === 0 && pageShouldContainData) {
+      if (page.rawItemCount === 0 && pageShouldContainData) {
         throw new MolitSaleRequestError(
           `MOLIT sale API returned an empty page before totalCount was exhausted for ${dealYmd}`,
           'API_RESPONSE_INVALID',
@@ -294,10 +337,16 @@ export class LiveMolitSaleClient implements MolitSaleClient {
       }
       const reachedEnd =
         (page.totalCount !== undefined && pageNo * pageSize >= page.totalCount) ||
-        (page.totalCount === undefined && page.deals.length === 0) ||
-        (page.totalCount === undefined && page.deals.length < pageSize);
-      if (reachedEnd) return { deals, complete: true };
-      if (filterDeals(input, deals).deals.length >= targetLimit) return { deals, complete: false };
+        (page.totalCount === undefined && page.rawItemCount === 0) ||
+        (page.totalCount === undefined && page.rawItemCount < pageSize);
+      if (reachedEnd) {
+        return {
+          deals: records
+            .filter((record) => !cancelledTransactions.has(record.transactionFingerprint))
+            .map((record) => record.deal),
+          complete: true
+        };
+      }
     }
     throw new MolitSaleRequestError('MOLIT sale pagination limit exceeded', 'API_RESPONSE_INVALID', true);
   }
@@ -326,7 +375,7 @@ export class LiveMolitSaleClient implements MolitSaleClient {
       }
       const batch = months.slice(index, index + MONTH_CONCURRENCY);
       const settledResults = await Promise.allSettled(
-        batch.map((dealYmd) => this.fetchMonth(input, dealYmd, deadlineAtMs, limit))
+        batch.map((dealYmd) => this.fetchMonth(input, dealYmd, deadlineAtMs))
       );
       const results = settledResults
         .filter((result): result is PromiseFulfilledResult<{ deals: SaleDeal[]; complete: boolean }> =>

@@ -112,6 +112,87 @@ describe('LiveMolitSaleClient', () => {
     expect(result.reasonCode).toBe('NO_COMPLEX_MATCH');
   });
 
+  it('matches a Juso building name to a MOLIT sale name with a Korean location qualifier', async () => {
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          '<response><header><resultCode>000</resultCode></header><body><totalCount>1</totalCount><items><item><offiNm>판교역 SK HUB</offiNm><dealYear>2026</dealYear><dealMonth>7</dealMonth><dealDay>1</dealDay><dealAmount>80,000</dealAmount><excluUseAr>31.15</excluUseAr><sggCd>41135</sggCd><umdNm>백현동</umdNm></item></items></body></response>',
+          { status: 200 }
+        )
+    );
+    const client = new LiveMolitSaleClient({ apiKey: 'key', baseUrl: 'https://apis.data.go.kr/1613000/' });
+
+    const result = await client.searchSaleComparables({
+      lawdCode: '41135',
+      dealYmdFrom: '202607',
+      dealYmdTo: '202607',
+      housingType: 'officetel',
+      legalDongName: '백현동',
+      complexName: 'SK HUB 오피스텔',
+      limit: 10
+    });
+
+    expect(result).toMatchObject({ status: 'MATCHES_FOUND', reasonCode: 'MATCHES_FOUND' });
+    expect(result.deals).toHaveLength(1);
+    expect(result.deals[0]?.complexName).toBe('판교역 SK HUB');
+  });
+
+  it('excludes cancelled sale rows from comparable evidence', async () => {
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          '<response><header><resultCode>000</resultCode></header><body><totalCount>2</totalCount><items><item><aptNm>해운대엑소디움</aptNm><cdealDay></cdealDay><cdealType></cdealType><dealAmount>185,000</dealAmount><dealYear>2026</dealYear><dealMonth>5</dealMonth><dealDay>22</dealDay><excluUseAr>181.774</excluUseAr><floor>32</floor><buildYear>2009</buildYear><sggCd>26350</sggCd><umdNm>우동</umdNm></item><item><aptNm>해운대엑소디움</aptNm><cdealDay>26.06.11</cdealDay><cdealType>O</cdealType><dealAmount>185,000</dealAmount><dealYear>2026</dealYear><dealMonth>5</dealMonth><dealDay>22</dealDay><excluUseAr>181.774</excluUseAr><floor>32</floor><buildYear>2009</buildYear><sggCd>26350</sggCd><umdNm>우동</umdNm></item></items></body></response>',
+          { status: 200 }
+        )
+    );
+    const client = new LiveMolitSaleClient({ apiKey: 'key', baseUrl: 'https://apis.data.go.kr/1613000/' });
+
+    const result = await client.searchSaleComparables({
+      lawdCode: '26350',
+      dealYmdFrom: '202605',
+      dealYmdTo: '202605',
+      housingType: 'apartment',
+      legalDongName: '우동',
+      complexName: '해운대엑소디움',
+      areaM2: 188,
+      areaToleranceM2: 7,
+      limit: 5
+    });
+
+    expect(result.deals).toHaveLength(0);
+    expect(result.totalMatched).toBe(0);
+    expect(result.filterStats?.raw).toBe(0);
+    expect(result).toMatchObject({ status: 'NO_MATCHES', reasonCode: 'NO_REPORTED_DEALS' });
+  });
+
+  it('scans the remaining month pages before accepting a sale that may be cancelled later', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const pageNo = new URL(String(input)).searchParams.get('pageNo');
+      const cancellation =
+        pageNo === '2' ? '<cdealDay>26.06.11</cdealDay><cdealType>O</cdealType>' : '<cdealDay></cdealDay><cdealType></cdealType>';
+      return new Response(
+        `<response><header><resultCode>000</resultCode></header><body><numOfRows>1</numOfRows><totalCount>2</totalCount><items><item><aptNm>해운대엑소디움</aptNm>${cancellation}<dealAmount>185,000</dealAmount><dealYear>2026</dealYear><dealMonth>5</dealMonth><dealDay>22</dealDay><excluUseAr>181.774</excluUseAr><floor>32</floor><buildYear>2009</buildYear><sggCd>26350</sggCd><umdNm>우동</umdNm></item></items></body></response>`,
+        { status: 200 }
+      );
+    });
+    globalThis.fetch = fetchMock;
+    const client = new LiveMolitSaleClient({ apiKey: 'key', baseUrl: 'https://apis.data.go.kr/1613000/' });
+
+    const result = await client.searchSaleComparables({
+      lawdCode: '26350',
+      dealYmdFrom: '202605',
+      dealYmdTo: '202605',
+      housingType: 'apartment',
+      legalDongName: '우동',
+      complexName: '해운대엑소디움',
+      limit: 1
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.deals).toHaveLength(0);
+    expect(result).toMatchObject({ status: 'NO_MATCHES', searchComplete: true });
+  });
+
   it('rejects XML without an official result code', async () => {
     globalThis.fetch = vi.fn(async () => new Response('<response><body><totalCount>0</totalCount></body></response>'));
     const client = new LiveMolitSaleClient({ apiKey: 'key', baseUrl: 'https://apis.data.go.kr/1613000/' });
