@@ -250,6 +250,15 @@ describe('resolveAddressRegion', () => {
     await expect(resolveAddressRegion('종로구 빌라 월세', 'villa')).resolves.toMatchObject({ lawdCode: '11110' });
   });
 
+  it('does not promote a colloquial area alias to a legal-dong name', async () => {
+    delete process.env.JUSO_API_KEY;
+
+    const result = await resolveAddressRegion('판교 오피스텔', 'officetel');
+
+    expect(result).toMatchObject({ lawdCode: '41135', source: 'local' });
+    expect(result.candidates[0]).toMatchObject({ eupmyeondong: '', confidence: 'medium' });
+  });
+
   it('uses Juso address candidates before local keyword mapping', async () => {
     process.env.JUSO_API_KEY = 'juso-key';
     process.env.JUSO_API_BASE_URL = 'https://business.juso.go.kr/addrlink/addrLinkApi.do';
@@ -284,6 +293,95 @@ describe('resolveAddressRegion', () => {
     expect(result.normalizedRegionName).toBe('경기도 부천시');
     expect(result.candidates[0]?.matchReason).toContain('도로명주소 API');
     expect(result.dataNotice).toContain('도로명주소');
+  });
+
+  it('retries a brand-focused Juso query inside the locally identified district', async () => {
+    const pangyoSkHub = jusoCandidate({
+      regionName: '경기도 성남시 분당구',
+      lawdCode: '41135',
+      sido: '경기도',
+      sigungu: '성남시 분당구',
+      eupmyeondong: '백현동',
+      roadAddress: '경기도 성남시 분당구 판교역로 109 (백현동)',
+      buildingName: 'SK HUB 오피스텔'
+    });
+    const searchAddress = vi.fn(async (query: string) => ({
+      candidates: query === '성남시 분당구 SK HUB 오피스텔' ? [pangyoSkHub] : [],
+      status: query === '성남시 분당구 SK HUB 오피스텔' ? ('MATCHES_FOUND' as const) : ('NO_MATCHES' as const),
+      reasonCode: query === '성남시 분당구 SK HUB 오피스텔' ? ('MATCHES_FOUND' as const) : ('NO_ADDRESS_MATCH' as const),
+      retryable: false,
+      dataNotice: '도로명주소 API 테스트 결과',
+      disclaimer: 'test disclaimer'
+    }));
+
+    const result = await resolveAddressRegion('판교 SK HUB', 'officetel', { searchAddress });
+
+    expect(searchAddress).toHaveBeenNthCalledWith(1, '판교 SK HUB', undefined);
+    expect(searchAddress).toHaveBeenNthCalledWith(2, '성남시 분당구 SK HUB 오피스텔', undefined);
+    expect(result).toMatchObject({
+      source: 'juso',
+      lookupStatus: 'MATCHED',
+      lookupReasonCode: 'BRAND_ASSISTED_MATCH_FOUND',
+      lawdCode: '41135'
+    });
+    expect(result.candidates[0]).toMatchObject({
+      eupmyeondong: '백현동',
+      buildingName: 'SK HUB 오피스텔'
+    });
+    expect(result.dataNotice).toContain('보조 검색어');
+  });
+
+  it('rejects a brand-assisted candidate with unmatched brand tokens', async () => {
+    const unrelatedSkView = jusoCandidate({
+      regionName: '경기도 성남시 분당구',
+      lawdCode: '41135',
+      sido: '경기도',
+      sigungu: '성남시 분당구',
+      eupmyeondong: '정자동',
+      roadAddress: '경기도 성남시 분당구 테스트로 1 (정자동)',
+      buildingName: 'SK VIEW 오피스텔'
+    });
+    const searchAddress = vi.fn(async (query: string) => ({
+      candidates: query === '성남시 분당구 SK 오피스텔' ? [unrelatedSkView] : [],
+      status: query === '성남시 분당구 SK 오피스텔' ? ('MATCHES_FOUND' as const) : ('NO_MATCHES' as const),
+      reasonCode: query === '성남시 분당구 SK 오피스텔' ? ('MATCHES_FOUND' as const) : ('NO_ADDRESS_MATCH' as const),
+      retryable: false,
+      dataNotice: '도로명주소 API 테스트 결과',
+      disclaimer: 'test disclaimer'
+    }));
+
+    const result = await resolveAddressRegion('판교SK허브', 'officetel', { searchAddress });
+
+    expect(searchAddress).toHaveBeenNthCalledWith(2, '성남시 분당구 SK 오피스텔', undefined);
+    expect(result).toMatchObject({
+      lookupStatus: 'NO_MATCHES',
+      lookupReasonCode: 'NO_ADDRESS_MATCH',
+      lawdCode: null
+    });
+    expect(result.candidates).toEqual([]);
+  });
+
+  it('does not turn an unresolved building name into a legal dong from an area nickname', async () => {
+    const searchAddress = vi.fn(async () => ({
+      candidates: [],
+      status: 'NO_MATCHES' as const,
+      reasonCode: 'NO_ADDRESS_MATCH' as const,
+      retryable: false,
+      dataNotice: '도로명주소 API에서 후보가 없습니다.',
+      disclaimer: 'test disclaimer'
+    }));
+
+    const result = await resolveAddressRegion('판교알수없는타워', 'officetel', { searchAddress });
+
+    expect(result).toMatchObject({
+      source: 'juso',
+      lookupStatus: 'NO_MATCHES',
+      lookupReasonCode: 'NO_ADDRESS_MATCH',
+      lawdCode: null,
+      normalizedRegionName: null
+    });
+    expect(result.candidates).toEqual([]);
+    expect(result.dataNotice).toContain('지역 별칭만으로 법정동을 추측하지 않았습니다');
   });
 
   it('asks instead of hardcoding a local preference when Juso and local intent conflict', async () => {

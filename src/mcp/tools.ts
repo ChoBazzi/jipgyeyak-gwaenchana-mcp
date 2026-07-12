@@ -3,7 +3,8 @@ import { z } from 'zod/v4';
 import { loadConfig } from '../config.js';
 import {
   CONTRACT_CHECK_DISCLAIMER,
-  type ComparableSearchInput
+  type ComparableSearchInput,
+  type ContractComparisonInput
 } from '../domain/types.js';
 import { resolveAddressRegion } from '../services/addressResolver.js';
 import { detectPrecontractCheckSignals } from '../services/checkService.js';
@@ -109,7 +110,17 @@ const CheckSignalSchema = z.object({
   suggestedVerification: z.string().trim().min(1).max(500)
 });
 
-export const DetectPrecontractCheckSignalsSchema = CompareContractTermsSchema;
+export const DetectPrecontractCheckSignalsSchema = z.object({
+  ...CompareContractTermsSchema.shape,
+  areaM2: CompareContractTermsSchema.shape.areaM2
+    .optional()
+    .describe(
+      '사용자가 확인한 면적 m2. 아파트·오피스텔·연립다세대는 전용면적, 단독다가구는 공공데이터 계약면적/연면적 기준이며 제공되지 않았다면 추측하지 말고 생략'
+    )
+}).refine((input) => input.depositKrw > 0 || input.monthlyRentKrw > 0, {
+  message: '보증금과 월세가 동시에 0원일 수 없습니다.',
+  path: ['depositKrw']
+});
 
 export const GenerateQuestionChecklistSchema = z.object({
   housingType: HousingTypeSchema.describe('주택 유형'),
@@ -160,7 +171,7 @@ export const TOOL_DEFINITIONS = [
   {
     name: 'resolve_address_region',
     description:
-      '집계약괜찮아 주소/지역명을 도로명주소 API 또는 내장 키워드 매핑으로 법정동 후보와 lawdCode 앞 5자리로 해석합니다. 서로 다른 지역 후보가 남거나 단독 동명만으로 확정할 수 없으면 첫 후보를 선택하지 않고 lookupStatus AMBIGUOUS, clarificationQuestion, clarificationOptions를 반환합니다. 이때 clarificationQuestion을 사용자에게 다시 질문하고 보완된 주소로 재호출합니다. lookupReasonCode와 retryable로 주소 무자료와 API 불가도 구분합니다.',
+      '집계약괜찮아 주소/지역명을 도로명주소 API 또는 내장 키워드 매핑으로 법정동 후보와 lawdCode 앞 5자리로 해석합니다. 지역과 영문 브랜드가 섞인 건물명은 해당 시군구·주택유형으로 한 번 보조 검색하며, 확인되지 않은 건물은 생활권 별칭만으로 법정동을 추측하지 않습니다. 서로 다른 지역 후보가 남거나 단독 동명만으로 확정할 수 없으면 첫 후보를 선택하지 않고 lookupStatus AMBIGUOUS, clarificationQuestion, clarificationOptions를 반환합니다. 이때 clarificationQuestion을 사용자에게 다시 질문하고 보완된 주소로 재호출합니다. lookupReasonCode와 retryable로 주소 무자료와 API 불가도 구분합니다.',
     annotations: {
       title: '집계약괜찮아 주소 지역 해석',
       readOnlyHint: true,
@@ -172,7 +183,7 @@ export const TOOL_DEFINITIONS = [
   {
     name: 'search_rent_comparables',
     description:
-      '집계약괜찮아 유사 전월세 신고 사례를 국토교통부 Open API에서 조회합니다. legalDongName으로 시군구 응답을 법정동까지 좁힐 수 있습니다. complexName은 특정 단지/건물명에만 사용하며, 지역명과 주택 유형만 있는 표현은 complexName에서 제외합니다. status, reasonCode, 단계별 filterStats와 nextActions로 무자료와 API 실패를 구분합니다.',
+      '집계약괜찮아의 법정동 코드와 조회 기간을 이미 확인한 경우에만 쓰는 저수준 유사 전월세 신고자료 검색 도구입니다. 사용자가 주소·보증금·월세·면적을 제공한 계약 조건 비교에는 직접 사용하지 말고 detect_precontract_check_signals를 호출합니다. legalDongName과 complexName은 resolve_address_region 등에서 확인한 값만 사용하고 지역명에서 법정동이나 단지명을 추측하지 않습니다. 지역명과 주택 유형만 있는 표현은 complexName에 넣지 않습니다. status, reasonCode, 단계별 filterStats와 nextActions로 무자료와 API 실패를 구분합니다.',
     annotations: {
       title: '집계약괜찮아 유사 전월세 사례 조회',
       readOnlyHint: true,
@@ -196,7 +207,7 @@ export const TOOL_DEFINITIONS = [
   {
     name: 'detect_precontract_check_signals',
     description:
-      '집계약괜찮아의 대표 계약 전 스크리닝 도구입니다. 도로명주소에서 검증한 건물·단지명과 법정동 기준의 전월세·매매 공공데이터 가격 조건 비교를 수행하고 NO_ADDITIONAL_PRICE_SIGNAL_FOUND, ADDITIONAL_VERIFICATION_REQUIRED, INSUFFICIENT_INFORMATION 중 하나와 checkSignals, itemsToVerify를 반환하므로 compare_contract_terms를 먼저 호출할 필요가 없습니다. NO_ADDITIONAL_PRICE_SIGNAL_FOUND도 권리관계나 계약 안전 확인을 뜻하지 않습니다. 등기부등본·건축물대장·보증보험은 자동 확인하지 않으며 전세사기 여부나 계약 안전성을 판정하지 않습니다.',
+      '집계약괜찮아의 대표 계약 전 스크리닝 도구이며 주소·보증금·월세·면적이 모두 제공되면 우선 호출합니다. 사용자가 제공하지 않은 주택 유형별 면적을 추측하지 말고 생략해 호출하며, 도구가 반환하는 MISSING_REQUIRED_INPUT의 clarificationQuestion을 사용자에게 전달합니다. 아파트·오피스텔·연립다세대는 전용면적, 단독다가구는 공공데이터 계약면적/연면적 기준을 사용합니다. 도로명주소에서 검증한 건물·단지명과 법정동 기준의 최근 전월세·매매 공공데이터 가격 조건 비교를 수행하므로 조회 월이나 법정동을 직접 추측하지 않습니다. 최상위 screeningSummary와 pricePosition에 입력 가격이 최근 신고 범위보다 낮은지·비슷한지·높은지와 근거 금액을 직접 반환합니다. NO_ADDITIONAL_PRICE_SIGNAL_FOUND, ADDITIONAL_VERIFICATION_REQUIRED, INSUFFICIENT_INFORMATION 중 하나와 checkSignals, itemsToVerify를 반환하므로 compare_contract_terms를 먼저 호출할 필요가 없습니다. 금액 단위나 주택 유형에 맞는 면적 기준이 불명확하면 추측하지 말고 사용자에게 확인합니다. NO_ADDITIONAL_PRICE_SIGNAL_FOUND도 권리관계나 계약 안전 확인을 뜻하지 않습니다. 등기부등본·건축물대장·보증보험은 자동 확인하지 않으며 전세사기 여부나 계약 안전성을 판정하지 않습니다.',
     annotations: {
       title: '집계약괜찮아 계약 전 확인 신호',
       readOnlyHint: true,
@@ -274,10 +285,32 @@ export function registerTools(server: McpServer, rentClient: MolitRentClient = c
       inputSchema: DetectPrecontractCheckSignalsSchema.shape,
       annotations: TOOL_DEFINITIONS[3].annotations
     },
-    async (input) =>
-      jsonResult(
-        await detectPrecontractCheckSignals(DetectPrecontractCheckSignalsSchema.parse(input), rentClient)
-      )
+    async (input) => {
+      const parsedInput = DetectPrecontractCheckSignalsSchema.parse(input);
+      if (parsedInput.areaM2 === undefined) {
+        const usesDetachedArea = parsedInput.housingType === 'detachedMultiFamily';
+        return jsonResult({
+          screeningOutcome: 'INSUFFICIENT_INFORMATION',
+          code: 'MISSING_REQUIRED_INPUT',
+          missingFields: ['areaM2'],
+          clarificationQuestion: usesDetachedArea
+            ? '비교할 단독다가구 주택의 공공데이터 기준 계약면적 또는 연면적은 몇 m2인가요? 계약서·건축물대장에서 해당 면적을 확인해 주세요.'
+            : '비교할 주택의 전용면적은 몇 m2인가요? 공급면적이나 계약면적이 아니라 계약서·건축물대장에 표시된 전용면적을 알려주세요.',
+          message: usesDetachedArea
+            ? '계약면적 또는 연면적이 제공되지 않아 가격 비교를 시작하지 않았습니다. 면적을 추측하지 않고 사용자 확인을 기다립니다.'
+            : '전용면적이 제공되지 않아 가격 비교를 시작하지 않았습니다. 면적을 추측하지 않고 사용자 확인을 기다립니다.',
+          nextActions: [
+            usesDetachedArea
+              ? '공공데이터 기준 계약면적 또는 연면적 m2를 확인해 다시 요청하세요.'
+              : '전용면적 m2를 확인해 다시 요청하세요.'
+          ],
+          disclaimer: CONTRACT_CHECK_DISCLAIMER
+        });
+      }
+      return jsonResult(
+        await detectPrecontractCheckSignals(parsedInput as ContractComparisonInput, rentClient)
+      );
+    }
   );
 
   server.registerTool(

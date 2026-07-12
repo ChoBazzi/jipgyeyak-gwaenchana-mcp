@@ -108,6 +108,70 @@ describe('HTTP MCP server', () => {
     expect(body).toContain('보증금과 월세가 동시에 0원일 수 없습니다.');
   });
 
+  it('asks for an exclusive area instead of forcing the agent to invent one', async () => {
+    const response = await fetch(`${baseUrl}/mcp`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream'
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 3,
+        method: 'tools/call',
+        params: {
+          name: 'detect_precontract_check_signals',
+          arguments: {
+            address: '해운대 엑소디움',
+            housingType: 'apartment',
+            depositKrw: 500_000_000,
+            monthlyRentKrw: 0
+          }
+        }
+      })
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain('MISSING_REQUIRED_INPUT');
+    expect(body).toContain('areaM2');
+    expect(body).toContain('전용면적');
+    expect(body).toContain('추측하지');
+    expect(body).toContain('"isError":false');
+  });
+
+  it('asks for contract or total-floor area for detached multi-family housing', async () => {
+    const response = await fetch(`${baseUrl}/mcp`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream'
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 4,
+        method: 'tools/call',
+        params: {
+          name: 'detect_precontract_check_signals',
+          arguments: {
+            address: '서울특별시 강서구 화곡동',
+            housingType: 'detachedMultiFamily',
+            depositKrw: 100_000_000,
+            monthlyRentKrw: 0
+          }
+        }
+      })
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain('MISSING_REQUIRED_INPUT');
+    expect(body).toContain('계약면적');
+    expect(body).toContain('연면적');
+    expect(body).not.toContain('계약면적이 아니라');
+    expect(body).toContain('"isError":false');
+  });
+
   it('limits repeated public MCP requests before they can exhaust external API quota', async () => {
     const limitedApp = createHttpApp(
       loadConfig({

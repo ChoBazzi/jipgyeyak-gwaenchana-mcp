@@ -927,6 +927,85 @@ describe('compareContractTerms', () => {
     expect(result.comparables.every((deal) => deal.complexName === '판교 효성 해링턴 타워')).toBe(true);
   });
 
+  it('uses a single brand-assisted Juso candidate as the reported property scope', async () => {
+    process.env.JUSO_API_KEY = 'juso-key';
+    process.env.JUSO_API_BASE_URL = 'https://business.juso.go.kr/addrlink/addrLinkApi.do';
+    const jusoQueries: string[] = [];
+    globalThis.fetch = vi.fn(async (input) => {
+      const keyword = new URL(String(input)).searchParams.get('keyword') ?? '';
+      jusoQueries.push(keyword);
+      const matched = keyword === '성남시 분당구 SK HUB 오피스텔';
+      return new Response(
+        JSON.stringify({
+          results: {
+            common: { errorCode: '0', errorMessage: '정상', totalCount: matched ? '1' : '0' },
+            juso: matched
+              ? [
+                  {
+                    roadAddr: '경기도 성남시 분당구 판교역로 109 (백현동)',
+                    jibunAddr: '경기도 성남시 분당구 백현동 529 SK HUB 오피스텔',
+                    bdNm: 'SK HUB 오피스텔',
+                    siNm: '경기도',
+                    sggNm: '성남시 분당구',
+                    emdNm: '백현동',
+                    admCd: '4113511000',
+                    bdMgtSn: '4113511000105290000000001'
+                  }
+                ]
+              : []
+          }
+        }),
+        { status: 200 }
+      );
+    });
+    let searchedInput: ComparableSearchInput | undefined;
+    const rentClient: MolitRentClient = {
+      async searchRentComparables(input) {
+        searchedInput = input;
+        return {
+          source: 'live',
+          requiresLiveData: false,
+          status: 'NO_MATCHES',
+          reasonCode: 'NO_AREA_MATCH',
+          retryable: false,
+          filterStats: { raw: 10, afterContractType: 8, afterLegalDong: 4, afterComplexName: 3, afterArea: 0 },
+          nextActions: ['전용면적을 확인하세요.'],
+          searchComplete: true,
+          requestedMonthCount: 12,
+          searchedMonthCount: 12,
+          dataNotice: '면적 일치 자료 없음',
+          deals: [],
+          totalMatched: 0,
+          disclaimer: 'test disclaimer'
+        };
+      }
+    };
+
+    const result = await compareContractTerms(
+      {
+        address: '판교 SK HUB',
+        housingType: 'officetel',
+        depositKrw: 70_000_000,
+        monthlyRentKrw: 750_000,
+        areaM2: 67
+      },
+      rentClient,
+      new Date('2026-07-08T00:00:00.000Z')
+    );
+
+    expect(jusoQueries).toEqual(['판교 SK HUB', '성남시 분당구 SK HUB 오피스텔']);
+    expect(searchedInput).toMatchObject({
+      lawdCode: '41135',
+      legalDongName: '백현동',
+      complexName: 'SK HUB 오피스텔'
+    });
+    expect(result).toMatchObject({
+      comparisonScope: 'SAME_REPORTED_PROPERTY',
+      resolvedBuildingName: 'SK HUB 오피스텔',
+      reasonCode: 'NO_AREA_MATCH'
+    });
+  });
+
   it('labels a legal-dong comparison as reference data instead of a building screening result', async () => {
     delete process.env.JUSO_API_KEY;
     let searchedInput: ComparableSearchInput | undefined;

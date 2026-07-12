@@ -33,6 +33,8 @@ describe('MCP tool definitions', () => {
     expect(searchTool?.description).toContain('지역명과 주택 유형만');
     expect(searchTool?.description).toContain('reasonCode');
     expect(searchTool?.description).toContain('filterStats');
+    expect(searchTool?.description).toContain('계약 조건 비교에는 직접 사용하지');
+    expect(searchTool?.description).toContain('detect_precontract_check_signals');
     expect(compareTool?.description).toContain('추측하지');
     expect(compareTool?.description).toContain('ADDRESS_AMBIGUOUS');
     expect(compareTool?.description).toContain('clarificationQuestion');
@@ -41,6 +43,9 @@ describe('MCP tool definitions', () => {
     expect(compareTool?.description).toContain('판정하지 않습니다');
     expect(signalTool?.description).toContain('전세사기 여부');
     expect(signalTool?.description).toContain('먼저 호출할 필요가 없습니다');
+    expect(signalTool?.description).toContain('주소·보증금·월세·면적이 모두 제공되면 우선 호출');
+    expect(signalTool?.description).toContain('screeningSummary와 pricePosition');
+    expect(signalTool?.description).toContain('면적을 추측하지 말고 생략');
     expect(checklistTool?.description).toContain('계약 안전성을 판정');
     expect(CONTRACT_CHECK_DISCLAIMER).toContain('전세사기 여부나 계약 안전성을 판정 또는 보장하지 않습니다');
   });
@@ -60,6 +65,14 @@ describe('MCP tool definitions', () => {
     ).toBe(false);
     expect(DetectPrecontractCheckSignalsSchema.safeParse({}).success).toBe(false);
     expect(DetectPrecontractCheckSignalsSchema.safeParse({ comparison: {} }).success).toBe(false);
+    expect(
+      DetectPrecontractCheckSignalsSchema.safeParse({
+        address: '부산광역시 해운대구 해운대해변로 30',
+        housingType: 'apartment',
+        depositKrw: 500_000_000,
+        monthlyRentKrw: 0
+      }).success
+    ).toBe(true);
     expect(
       CompareContractTermsSchema.safeParse({
         address: '서울특별시 강남구 삼성로 212 101동 1001호',

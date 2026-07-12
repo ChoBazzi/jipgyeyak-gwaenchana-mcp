@@ -8,6 +8,7 @@ export type ContractType = 'jeonse' | 'wolse';
 export type AddressLookupStatus = 'MATCHED' | 'AMBIGUOUS' | 'NO_MATCHES' | 'LIVE_DATA_UNAVAILABLE';
 export type AddressLookupReasonCode =
   | 'MATCHES_FOUND'
+  | 'BRAND_ASSISTED_MATCH_FOUND'
   | 'MULTIPLE_ADDRESS_MATCHES'
   | 'LOCAL_MATCH_FOUND'
   | 'NO_ADDRESS_MATCH'
@@ -204,6 +205,22 @@ export type ScreeningOutcome =
   | 'NO_ADDITIONAL_PRICE_SIGNAL_FOUND'
   | 'ADDITIONAL_VERIFICATION_REQUIRED'
   | 'INSUFFICIENT_INFORMATION';
+export type PriceComparisonPosition =
+  | 'BELOW_COMPARABLE_RANGE'
+  | 'WITHIN_COMPARABLE_RANGE'
+  | 'ABOVE_COMPARABLE_RANGE'
+  | 'INSUFFICIENT_DATA';
+
+export interface PricePositionAssessment {
+  basis: 'JEONSE_DEPOSIT' | 'WOLSE_MONTHLY_RENT_PAIRED_BY_DEPOSIT' | 'UNAVAILABLE';
+  position: PriceComparisonPosition;
+  inputKrw: number;
+  medianKrw: number | null;
+  minKrw: number | null;
+  maxKrw: number | null;
+  comparableSampleCount: number;
+  summary: string;
+}
 
 export interface SalePriceAssessment {
   status: 'ASSESSED' | 'NO_MATCHES' | 'LIVE_DATA_UNAVAILABLE' | 'INVALID_REQUEST' | 'NOT_CHECKED';
@@ -279,6 +296,7 @@ export interface CheckSignal {
 export interface PrecontractCheckResult {
   screeningOutcome: ScreeningOutcome;
   screeningSummary: string;
+  pricePosition: PricePositionAssessment;
   checkSignals: CheckSignal[];
   itemsToVerify: string[];
   notAutomaticallyVerifiedItems: string[];

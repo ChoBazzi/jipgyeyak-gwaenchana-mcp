@@ -6,6 +6,7 @@ import {
   type HousingType,
   type RegionCandidate
 } from '../domain/types.js';
+import { asciiBrandTokens, candidateBrandIdentityMatches } from '../utils/propertyName.js';
 import { FallbackJusoAddressClient, type JusoAddressClient } from './jusoAddressClient.js';
 
 const ADDRESS_MATCH_NOTICE =
@@ -13,6 +14,13 @@ const ADDRESS_MATCH_NOTICE =
 
 const ADDRESS_INSUFFICIENT_NOTICE =
   '입력 주소를 법정동 코드로 해석할 정보가 부족합니다. 도로명주소, 지번주소, 시군구/동 이름을 더 구체적으로 입력한 뒤 다시 시도해 주세요.';
+
+const HOUSING_TYPE_JUSO_TERM: Record<HousingType, string> = {
+  apartment: '아파트',
+  officetel: '오피스텔',
+  villa: '빌라',
+  detachedMultiFamily: '단독주택'
+};
 
 const LOCAL_REGION_INDEX: Array<RegionCandidate & { keywords: string[] }> = [
   {
@@ -112,13 +120,7 @@ function normalizeAddress(address: string): string {
 function toCandidate(region: RegionCandidate & { keywords: string[] }, compactAddress: string): RegionCandidate {
   const matchedKeywords = region.keywords.filter((keyword) => compactAddress.includes(keyword.replace(/\s/g, '')));
   const canonicalLegalDong = matchedKeywords
-    .map((keyword) => {
-      if (/(?:동\d*가?|읍|면)$/u.test(keyword)) return keyword;
-      return region.keywords.find((candidate) =>
-        [`${keyword}동`, `${keyword}읍`, `${keyword}면`].includes(candidate)
-      );
-    })
-    .filter((value): value is string => Boolean(value))
+    .filter((keyword) => /(?:동\d*가?|읍|면)$/u.test(keyword))
     .sort((a, b) => b.length - a.length)[0];
   const matchedKeyword = canonicalLegalDong ?? matchedKeywords.sort((a, b) => b.length - a.length)[0];
 
@@ -148,6 +150,70 @@ function normalizeForMatch(value: string): string {
     .replace(/\([^)]*\)/g, '')
     .replace(/\s+/g, '')
     .trim();
+}
+
+function brandFocusedJusoQuery(
+  address: string,
+  housingType: HousingType | undefined,
+  localCandidates: RegionCandidate[]
+): string | undefined {
+  if (!housingType || distinctLawdCodes(localCandidates).size !== 1) return undefined;
+
+  const primary = localCandidates[0];
+  if (!primary) return undefined;
+  const brandTokens = asciiBrandTokens(address);
+  if (brandTokens.length === 0) return undefined;
+
+  return `${primary.sigungu} ${brandTokens.join(' ')} ${HOUSING_TYPE_JUSO_TERM[housingType]}`;
+}
+
+function hasUnresolvedBuildingTerms(address: string, localCandidates: RegionCandidate[]): boolean {
+  if (localCandidates.length === 0) return false;
+
+  let remainder = normalizeForMatch(address);
+  const localLawdCodes = distinctLawdCodes(localCandidates);
+  const regionTerms = LOCAL_REGION_INDEX
+    .filter((region) => localLawdCodes.has(region.lawdCode))
+    .flatMap((region) => [region.regionName, region.sido, region.sigungu, ...region.keywords])
+    .map(normalizeForMatch)
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length);
+
+  for (const term of regionTerms) remainder = remainder.replaceAll(term, '');
+  remainder = remainder.replace(
+    /아파트|오피스텔|주상복합|연립주택|다세대주택|단독주택|다가구주택|빌라|에서|근처|주변|계약|월세|전세|매매|비교|확인|알려줘|봐줘|문의|하려고|해주세요|해줘/gu,
+    ''
+  );
+
+  return remainder.replace(/[^\p{L}]/gu, '').length >= 2;
+}
+
+function unresolvedBuildingAddressResult(
+  normalizedAddress: string,
+  dataNotice: string
+): AddressResolution {
+  const clarificationQuestion = `입력한 "${normalizedAddress}"의 건물을 도로명주소에서 확인하지 못했습니다. 정확한 도로명주소나 지번주소를 알려주세요.`;
+
+  return {
+    normalizedAddress,
+    normalizedRegionName: null,
+    lawdCode: null,
+    candidates: [],
+    source: 'juso',
+    lookupStatus: 'NO_MATCHES',
+    lookupReasonCode: 'NO_ADDRESS_MATCH',
+    retryable: false,
+    nextActions: [
+      '정확한 도로명주소나 지번주소를 입력하세요.',
+      '건축물대장 또는 중개대상물 확인설명서의 공식 건물명을 확인하세요.'
+    ],
+    clarificationQuestion,
+    dataNotice: joinNotices(
+      dataNotice,
+      '건물명이 확인되지 않아 지역 별칭만으로 법정동을 추측하지 않았습니다.'
+    ),
+    disclaimer: CONTRACT_CHECK_DISCLAIMER
+  };
 }
 
 function exactAddressCandidates(address: string, candidates: RegionCandidate[]): RegionCandidate[] {
@@ -321,14 +387,48 @@ function createJusoClientFromEnv(): JusoAddressClient {
 
 export async function resolveAddressRegion(
   address: string,
-  _housingType?: HousingType,
+  housingType?: HousingType,
   jusoClient: JusoAddressClient = createJusoClientFromEnv(),
   signal?: AbortSignal
 ): Promise<AddressResolution> {
   const normalizedAddress = normalizeAddress(address);
   const compactAddress = normalizedAddress.replace(/\s/g, '');
-  const jusoResult = await jusoClient.searchAddress(normalizedAddress, signal);
+  let jusoResult = await jusoClient.searchAddress(normalizedAddress, signal);
   const localCandidates = findLocalCandidates(compactAddress);
+  let usedBrandFocusedSearch = false;
+
+  if (jusoResult.candidates.length === 0 && jusoResult.status === 'NO_MATCHES') {
+    const alternativeQuery = brandFocusedJusoQuery(normalizedAddress, housingType, localCandidates);
+    if (alternativeQuery && alternativeQuery !== normalizedAddress) {
+      const alternativeResult = await jusoClient.searchAddress(alternativeQuery, signal);
+      const localLawdCodes = distinctLawdCodes(localCandidates);
+      const regionalCandidates = alternativeResult.candidates.filter(
+        (candidate) =>
+          localLawdCodes.has(candidate.lawdCode) &&
+          candidateBrandIdentityMatches(normalizedAddress, candidate.buildingName)
+      );
+      if (regionalCandidates.length > 0) {
+        usedBrandFocusedSearch = true;
+        jusoResult = {
+          ...alternativeResult,
+          candidates: regionalCandidates,
+          dataNotice: joinNotices(
+            jusoResult.dataNotice,
+            `입력 표기의 영문 브랜드를 지역·주택유형 보조 검색어 "${alternativeQuery}"로 재조회했습니다.`,
+            alternativeResult.dataNotice
+          )
+        };
+      } else if (alternativeResult.candidates.length > 0) {
+        jusoResult = {
+          ...jusoResult,
+          dataNotice: joinNotices(
+            jusoResult.dataNotice,
+            '지역·주택유형 보조 검색 후보의 영문 건물명 토큰이 입력과 일치하지 않아 사용하지 않았습니다.'
+          )
+        };
+      }
+    }
+  }
 
   if (jusoResult.candidates.length > 0) {
     const exactCandidates = exactAddressCandidates(normalizedAddress, jusoResult.candidates);
@@ -374,12 +474,19 @@ export async function resolveAddressRegion(
       candidates: narrowedCandidates,
       source: 'juso',
       lookupStatus: 'MATCHED',
-      lookupReasonCode: 'MATCHES_FOUND',
+      lookupReasonCode: usedBrandFocusedSearch ? 'BRAND_ASSISTED_MATCH_FOUND' : 'MATCHES_FOUND',
       retryable: false,
       nextActions: [],
       dataNotice: jusoResult.dataNotice,
       disclaimer: CONTRACT_CHECK_DISCLAIMER
     };
+  }
+
+  if (
+    jusoResult.status === 'NO_MATCHES' &&
+    hasUnresolvedBuildingTerms(normalizedAddress, localCandidates)
+  ) {
+    return unresolvedBuildingAddressResult(normalizedAddress, jusoResult.dataNotice);
   }
 
   if (distinctLawdCodes(localCandidates).size > 1) {

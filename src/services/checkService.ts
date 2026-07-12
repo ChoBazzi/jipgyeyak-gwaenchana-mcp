@@ -4,6 +4,7 @@ import {
   type ContractComparison,
   type ContractComparisonInput,
   type ContractComparisonStatus,
+  type PricePositionAssessment,
   type PrecontractCheckResult
 } from '../domain/types.js';
 import type { MolitRentClient } from './molitClient.js';
@@ -14,6 +15,88 @@ function effectiveComparisonStatus(comparison: ContractComparison): ContractComp
   if (!comparison.addressResolution.lawdCode) return 'ADDRESS_UNRESOLVED';
   if (comparison.comparableSource === 'unavailable') return 'LIVE_DATA_UNAVAILABLE';
   return comparison.sampleCount > 0 ? 'COMPARED' : 'NO_MATCHES';
+}
+
+function formatKrw(value: number): string {
+  const eok = Math.floor(value / 100_000_000);
+  const manwon = Math.round((value % 100_000_000) / 10_000);
+  if (eok > 0 && manwon > 0) return `${eok}억 ${manwon.toLocaleString('ko-KR')}만원`;
+  if (eok > 0) return `${eok}억원`;
+  return `${Math.round(value / 10_000).toLocaleString('ko-KR')}만원`;
+}
+
+function formatKrwRange(min: number, max: number): string {
+  return min === max ? formatKrw(min) : `${formatKrw(min)}~${formatKrw(max)}`;
+}
+
+function pricePositionAssessment(comparison: ContractComparison): PricePositionAssessment {
+  const isWolse = comparison.monthlyRentKrw.input > 0;
+  const basis = isWolse ? 'WOLSE_MONTHLY_RENT_PAIRED_BY_DEPOSIT' : 'JEONSE_DEPOSIT';
+  const inputKrw = isWolse ? comparison.monthlyRentKrw.input : comparison.depositKrw.input;
+  const medianKrw = isWolse ? comparison.monthlyRentKrw.median : comparison.depositKrw.median;
+  const minKrw = isWolse ? comparison.monthlyRentKrw.min : comparison.depositKrw.min;
+  const maxKrw = isWolse ? comparison.monthlyRentKrw.max : comparison.depositKrw.max;
+  const comparableSampleCount = isWolse
+    ? comparison.monthlyRentKrw.comparableSampleCount
+    : comparison.sampleCount;
+  const subject = isWolse ? '월세' : '보증금';
+
+  if (
+    effectiveComparisonStatus(comparison) !== 'COMPARED' ||
+    comparison.comparisonScope !== 'SAME_REPORTED_PROPERTY' ||
+    medianKrw === null ||
+    minKrw === null ||
+    maxKrw === null ||
+    comparableSampleCount === 0
+  ) {
+    return {
+      basis: 'UNAVAILABLE',
+      position: 'INSUFFICIENT_DATA',
+      inputKrw,
+      medianKrw,
+      minKrw,
+      maxKrw,
+      comparableSampleCount,
+      summary: `동일 신고 건물·단지명의 유사 조건 자료가 부족해 입력 ${subject}의 가격 위치를 계산하지 못했습니다.`
+    };
+  }
+
+  const comparableRange = formatKrwRange(minKrw, maxKrw);
+  if (inputKrw < minKrw) {
+    return {
+      basis,
+      position: 'BELOW_COMPARABLE_RANGE',
+      inputKrw,
+      medianKrw,
+      minKrw,
+      maxKrw,
+      comparableSampleCount,
+      summary: `가격만 보면 입력 ${subject} ${formatKrw(inputKrw)}은 동일 신고 건물·단지명 유사 면적 최근 신고 범위 ${comparableRange}보다 ${formatKrwRange(minKrw - inputKrw, maxKrw - inputKrw)} 낮습니다.`
+    };
+  }
+  if (inputKrw > maxKrw) {
+    return {
+      basis,
+      position: 'ABOVE_COMPARABLE_RANGE',
+      inputKrw,
+      medianKrw,
+      minKrw,
+      maxKrw,
+      comparableSampleCount,
+      summary: `가격만 보면 입력 ${subject} ${formatKrw(inputKrw)}은 동일 신고 건물·단지명 유사 면적 최근 신고 범위 ${comparableRange}보다 ${formatKrwRange(inputKrw - maxKrw, inputKrw - minKrw)} 높습니다.`
+    };
+  }
+
+  return {
+    basis,
+    position: 'WITHIN_COMPARABLE_RANGE',
+    inputKrw,
+    medianKrw,
+    minKrw,
+    maxKrw,
+    comparableSampleCount,
+    summary: `가격만 보면 입력 ${subject} ${formatKrw(inputKrw)}은 동일 신고 건물·단지명 유사 면적 최근 신고 범위 ${comparableRange} 안에 있으며 중앙값은 ${formatKrw(medianKrw)}입니다.`
+  };
 }
 
 function buildSignals(comparison: ContractComparison): CheckSignal[] {
@@ -47,7 +130,10 @@ function buildSignals(comparison: ContractComparison): CheckSignal[] {
       code: 'LOW_SAMPLE_COUNT',
       label: '유사 거래 표본 수 부족',
       detail: `현재 조건에서 유사 표본은 ${comparison.sampleCount}건입니다.`,
-      suggestedVerification: '면적 허용 범위, 단지명 조건, 조회 기간을 넓혀 공공데이터 신고자료를 다시 확인하세요.'
+      suggestedVerification:
+        comparison.reasonCode === 'NO_AREA_MATCH'
+          ? '아파트·오피스텔·연립다세대는 입력 면적이 전용면적인지 먼저 확인하고, 전용면적이 맞다면 허용 범위를 조정하세요.'
+          : '면적 허용 범위, 단지명 조건, 조회 기간을 넓혀 공공데이터 신고자료를 다시 확인하세요.'
     });
   }
 
@@ -161,7 +247,59 @@ function buildSignals(comparison: ContractComparison): CheckSignal[] {
   return signals;
 }
 
-function screeningSummary(comparison: ContractComparison): string {
+function screeningSummary(
+  comparison: ContractComparison,
+  pricePosition: PricePositionAssessment
+): string {
+  if (pricePosition.position !== 'INSUFFICIENT_DATA') {
+    const fragments = [pricePosition.summary];
+    const sale = comparison.salePriceAssessment;
+    if (
+      sale.status === 'ASSESSED' &&
+      sale.medianSalePriceKrw !== null &&
+      sale.depositToMedianSalePricePercent !== null
+    ) {
+      fragments.push(
+        `동일 신고 건물·단지명 유사 면적 매매가 중앙값은 ${formatKrw(sale.medianSalePriceKrw)}이며 입력 보증금은 그 ${sale.depositToMedianSalePricePercent}%입니다(매매 표본 ${sale.sampleCount}건). 이 비율은 집계약괜찮아 내부 추가 확인 기준 80%보다 ${sale.depositToMedianSalePricePercent >= 80 ? '높거나 같습니다' : '낮습니다'}.`
+      );
+    }
+    if (pricePosition.position === 'BELOW_COMPARABLE_RANGE') {
+      fragments.push('최근 신고 범위보다 낮은 이유가 층·상태 차이인지, 권리관계나 특약 같은 별도 조건 때문인지 확인하세요.');
+    } else if (pricePosition.position === 'ABOVE_COMPARABLE_RANGE') {
+      fragments.push('최근 신고 범위보다 높은 조건이므로 층·상태·옵션 차이와 보증금 조정 가능성을 확인하세요.');
+    }
+    if (
+      comparison.confidence !== 'HIGH' ||
+      pricePosition.comparableSampleCount < 5 ||
+      sale.status !== 'ASSESSED' ||
+      sale.sampleCount < 3
+    ) {
+      fragments.push(
+        `다만 전월세 표본 ${pricePosition.comparableSampleCount}건, 매매 표본 ${sale.sampleCount}건으로 제한적이어서 가격 위치의 신뢰도는 ${comparison.confidence}입니다.`
+      );
+    }
+    fragments.push(
+      '이는 공공데이터 가격 조건 비교일 뿐 계약 안전이나 권리관계를 확인한 결과가 아니므로 등기부등본과 보증보험 가능 여부는 별도로 확인해야 합니다.'
+    );
+    return fragments.join(' ');
+  }
+
+  const status = effectiveComparisonStatus(comparison);
+  const isWolse = comparison.monthlyRentKrw.input > 0;
+  if (
+    status === 'COMPARED' &&
+    comparison.comparisonScope === 'SAME_REPORTED_PROPERTY' &&
+    isWolse &&
+    comparison.sampleCount > 0 &&
+    comparison.monthlyRentKrw.comparableSampleCount === 0
+  ) {
+    const maximumDepositDifferencePercent = comparison.monthlyRentKrw.maximumDepositDifferencePercent ?? 25;
+    const completionNotice = comparison.searchComplete
+      ? ''
+      : ' 요청 기간 전체 조회가 완료되지 않았고,';
+    return `동일 신고 건물·단지명의 유사 면적 월세 신고자료 ${comparison.sampleCount}건은 확인했지만,${completionNotice} 입력 보증금 ${formatKrw(comparison.depositKrw.input)}과 차이가 ${maximumDepositDifferencePercent}% 이내인 표본은 0건입니다. 따라서 입력 월세 ${formatKrw(comparison.monthlyRentKrw.input)}이 높은지 낮은지 직접 비교할 수 없습니다. 보증금 수준이 다른 월세를 단순 비교하지 않았으며, 비슷한 보증금 조건의 최근 사례와 관리비·옵션 차이를 추가로 확인해야 합니다.`;
+  }
+
   switch (comparison.screeningOutcome) {
     case 'NO_ADDITIONAL_PRICE_SIGNAL_FOUND':
       return '도로명주소에서 확인한 건물·단지명의 공공데이터 가격 조건 비교에서는 추가 확인이 필요한 특이 신호가 확인되지 않았습니다. 이는 계약 안전이나 권리관계를 확인한 결과가 아니므로 등기부등본과 보증보험 가능 여부는 별도로 확인해야 합니다.';
@@ -183,10 +321,12 @@ export async function detectPrecontractCheckSignals(
   const comparison =
     'comparison' in input && input.comparison ? input.comparison : await compareContractTerms(input as ContractComparisonInput, rentClient);
   const checkSignals = buildSignals(comparison);
+  const pricePosition = pricePositionAssessment(comparison);
 
   return {
     screeningOutcome: comparison.screeningOutcome,
-    screeningSummary: screeningSummary(comparison),
+    screeningSummary: screeningSummary(comparison, pricePosition),
+    pricePosition,
     checkSignals,
     itemsToVerify: [
       '등기부등본의 소유자, 근저당권, 압류/가압류 등 권리관계',

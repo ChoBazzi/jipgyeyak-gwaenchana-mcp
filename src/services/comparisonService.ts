@@ -15,6 +15,7 @@ import {
 } from '../domain/types.js';
 import { loadConfig } from '../config.js';
 import { dealYmdToRangeStart, subtractMonths, toDealYmd, toIsoDate } from '../utils/date.js';
+import { candidateBrandIdentityMatches, reportedPropertyNamesMatch } from '../utils/propertyName.js';
 import { median, percentDifference, range } from '../utils/stats.js';
 import { resolveAddressRegion } from './addressResolver.js';
 import type { MolitRentClient } from './molitClient.js';
@@ -32,7 +33,10 @@ function nextActionsForReason(reasonCode: ContractComparisonReasonCode, retryabl
     case 'NO_COMPLEX_MATCH':
       return ['단지명을 빼거나 공식 단지명으로 바꿔 다시 조회하세요.'];
     case 'NO_AREA_MATCH':
-      return ['면적 허용 범위를 넓혀 다시 조회하세요.'];
+      return [
+        '아파트·오피스텔·연립다세대는 입력 면적이 공급면적이 아닌 전용면적인지 확인하세요.',
+        '면적 허용 범위를 넓혀 다시 조회하세요.'
+      ];
     case 'NO_REPORTED_DEALS':
       return ['조회 기간을 넓혀 다시 조회하세요.'];
     case 'API_KEY_MISSING':
@@ -187,6 +191,20 @@ function candidateDecision(
     return { selected, buildingName: selected?.buildingName, ambiguous: false };
   }
 
+  const brandAssistedCandidate = candidates.length === 1 ? candidates[0] : undefined;
+  if (
+    brandAssistedCandidate &&
+    addressResolution.lookupReasonCode === 'BRAND_ASSISTED_MATCH_FOUND' &&
+    hasDistinctBuildingIdentity(brandAssistedCandidate) &&
+    candidateBrandIdentityMatches(
+      input.complexName ? `${input.address} ${input.complexName}` : input.address,
+      brandAssistedCandidate.buildingName
+    )
+  ) {
+    const selected = brandAssistedCandidate;
+    return { selected, buildingName: selected?.buildingName, ambiguous: false };
+  }
+
   const requestedBuilding = normalizeBuildingName(input.complexName);
   if (requestedBuilding) {
     const candidatesWithBuildingIdentity = candidates.filter(hasDistinctBuildingIdentity);
@@ -200,7 +218,7 @@ function candidateDecision(
     const buildingCandidates = candidatesWithBuildingIdentity.filter((candidate) => {
       const buildingName = normalizeBuildingName(candidate.buildingName);
       if (!buildingName) return false;
-      return buildingName.includes(requestedBuilding) || requestedBuilding.includes(buildingName);
+      return reportedPropertyNamesMatch(input.complexName ?? '', candidate.buildingName);
     });
     if (representsOneNamedComplex(buildingCandidates)) {
       const selected = buildingCandidates[0];
@@ -395,7 +413,7 @@ function summarize(input: ContractComparisonInput, result: ContractComparison): 
       case 'NO_COMPLEX_MATCH':
         return '공공데이터 조회는 완료됐지만 요청한 단지명과 일치하는 신고자료가 없습니다. 공식 단지명을 확인하거나 단지명 조건을 빼고 다시 조회해 주세요.';
       case 'NO_AREA_MATCH':
-        return '공공데이터 조회는 완료됐지만 요청한 면적 범위와 일치하는 신고자료가 없습니다. 면적 허용 범위를 넓혀 다시 확인해 주세요.';
+        return '공공데이터 조회는 완료됐지만 요청한 면적 범위와 일치하는 신고자료가 없습니다. 아파트·오피스텔·연립다세대는 입력값이 전용면적인지 먼저 확인하고, 전용면적이 맞다면 허용 범위를 조정해 다시 확인해 주세요.';
       default:
         return '공공데이터 조회는 완료됐지만 해당 지역과 기간에 비교할 신고자료가 없습니다. 조회 기간을 넓혀 다시 확인해 주세요.';
     }

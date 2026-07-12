@@ -216,6 +216,143 @@ describe('detectPrecontractCheckSignals', () => {
     expect(result.comparison).toMatchObject({ comparisonScope: 'SAME_REPORTED_PROPERTY', confidence: 'HIGH' });
   });
 
+  it('answers the price question directly even when verified-property samples are limited', async () => {
+    mockVerifiedPropertyAddress();
+    const rentDeals = [700_000_000, 800_000_000].map((depositKrw, index) => ({
+      id: `limited-rent-${index}`,
+      lawdCode: '11680',
+      regionName: '역삼동',
+      housingType: 'apartment' as const,
+      contractDate: `2026-0${index + 5}-20`,
+      contractType: 'jeonse' as const,
+      depositKrw,
+      monthlyRentKrw: 0,
+      areaM2: 181.774,
+      complexName: '역삼센트럴',
+      source: 'live' as const
+    }));
+
+    const result = await detectPrecontractCheckSignals(
+      {
+        address: '서울특별시 강남구 역삼동 역삼센트럴',
+        housingType: 'apartment',
+        depositKrw: 500_000_000,
+        monthlyRentKrw: 0,
+        areaM2: 188,
+        complexName: '역삼센트럴'
+      },
+      mockRentClient(
+        {
+          source: 'live',
+          requiresLiveData: false,
+          status: 'MATCHES_FOUND',
+          reasonCode: 'MATCHES_FOUND',
+          retryable: false,
+          searchComplete: true,
+          dataNotice: '임대차 조회 완료',
+          totalMatched: rentDeals.length,
+          deals: rentDeals,
+          disclaimer: 'test disclaimer'
+        },
+        {
+          source: 'live',
+          status: 'MATCHES_FOUND',
+          reasonCode: 'MATCHES_FOUND',
+          retryable: false,
+          nextActions: [],
+          searchComplete: true,
+          dataNotice: '매매 조회 완료',
+          totalMatched: 1,
+          deals: [
+            {
+              id: 'limited-sale-1',
+              lawdCode: '11680',
+              regionName: '역삼동',
+              housingType: 'apartment' as const,
+              contractDate: '2026-05-22',
+              salePriceKrw: 1_850_000_000,
+              areaM2: 181.774,
+              complexName: '역삼센트럴',
+              source: 'live' as const
+            }
+          ],
+          disclaimer: 'test disclaimer'
+        }
+      )
+    );
+
+    expect(result.screeningOutcome).toBe('INSUFFICIENT_INFORMATION');
+    expect(result.pricePosition).toMatchObject({
+      basis: 'JEONSE_DEPOSIT',
+      position: 'BELOW_COMPARABLE_RANGE',
+      inputKrw: 500_000_000,
+      medianKrw: 750_000_000,
+      minKrw: 700_000_000,
+      maxKrw: 800_000_000,
+      comparableSampleCount: 2
+    });
+    expect(result.screeningSummary).toContain('5억원');
+    expect(result.screeningSummary).toContain('7억원~8억원');
+    expect(result.screeningSummary).toContain('2억원~3억원 낮습니다');
+    expect(result.screeningSummary).toContain('18억 5,000만원');
+    expect(result.screeningSummary).toContain('27%');
+    expect(result.screeningSummary).toContain('80%보다 낮습니다');
+    expect(result.screeningSummary).toContain('표본 2건');
+    expect(result.screeningSummary).toContain('계약 안전');
+  });
+
+  it('explains directly when wolse samples have no comparable deposit level', async () => {
+    mockVerifiedPropertyAddress();
+    const deals = Array.from({ length: 5 }, (_, index) => ({
+      id: `wolse-unpaired-${index}`,
+      lawdCode: '11680',
+      regionName: '역삼동',
+      housingType: 'officetel' as const,
+      contractDate: `2026-07-0${index + 1}`,
+      contractType: 'wolse' as const,
+      depositKrw: index % 2 === 0 ? 10_000_000 : 200_000_000,
+      monthlyRentKrw: 900_000 + index * 50_000,
+      areaM2: 31.15,
+      complexName: '역삼센트럴',
+      source: 'live' as const
+    }));
+
+    const result = await detectPrecontractCheckSignals(
+      {
+        address: '서울특별시 강남구 역삼동 역삼센트럴',
+        housingType: 'officetel',
+        depositKrw: 70_000_000,
+        monthlyRentKrw: 750_000,
+        areaM2: 31.15,
+        complexName: '역삼센트럴'
+      },
+      mockRentClient({
+        source: 'live',
+        requiresLiveData: false,
+        status: 'MATCHES_FOUND',
+        reasonCode: 'MATCHES_FOUND',
+        retryable: false,
+        searchComplete: true,
+        requestedMonthCount: 12,
+        searchedMonthCount: 12,
+        dataNotice: '임대차 조회 완료',
+        totalMatched: deals.length,
+        deals,
+        disclaimer: 'test disclaimer'
+      })
+    );
+
+    expect(result.pricePosition).toMatchObject({
+      basis: 'UNAVAILABLE',
+      position: 'INSUFFICIENT_DATA',
+      comparableSampleCount: 0
+    });
+    expect(result.screeningSummary).toContain('월세 신고자료 5건은 확인');
+    expect(result.screeningSummary).toContain('입력 보증금 7,000만원');
+    expect(result.screeningSummary).toContain('25% 이내인 표본은 0건');
+    expect(result.screeningSummary).toContain('입력 월세 75만원이 높은지 낮은지 직접 비교할 수 없습니다');
+  });
+
   it('does not treat legal-dong reference data as a contract-level screening result', async () => {
     delete process.env.JUSO_API_KEY;
     const result = await detectPrecontractCheckSignals(
