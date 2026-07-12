@@ -30,6 +30,25 @@ interface JusoAddressItem {
   bdMgtSn?: string;
 }
 
+interface JusoResponseFailure {
+  status: JusoAddressSearchStatus;
+  reasonCode: AddressLookupReasonCode;
+  retryable: boolean;
+}
+
+const JUSO_AUTH_ERROR_CODES = new Set(['E0001', 'E0014']);
+const JUSO_INVALID_REQUEST_CODES = new Set([
+  'E0005',
+  'E0006',
+  'E0008',
+  'E0009',
+  'E0010',
+  'E0011',
+  'E0012',
+  'E0013',
+  'E0015'
+]);
+
 class JusoRequestError extends Error {
   constructor(
     message: string,
@@ -103,28 +122,53 @@ function toCandidate(item: JusoAddressItem): RegionCandidate | null {
   };
 }
 
+function classifyJusoBodyError(errorCode: string): JusoResponseFailure {
+  if (JUSO_AUTH_ERROR_CODES.has(errorCode)) {
+    return { status: 'LIVE_DATA_UNAVAILABLE', reasonCode: 'API_AUTH_ERROR', retryable: false };
+  }
+
+  if (JUSO_INVALID_REQUEST_CODES.has(errorCode)) {
+    return { status: 'NO_MATCHES', reasonCode: 'INVALID_REQUEST', retryable: false };
+  }
+
+  if (errorCode === '-999') {
+    return { status: 'LIVE_DATA_UNAVAILABLE', reasonCode: 'API_REQUEST_FAILED', retryable: true };
+  }
+
+  return { status: 'LIVE_DATA_UNAVAILABLE', reasonCode: 'API_RESPONSE_INVALID', retryable: true };
+}
+
 function parseJusoCandidates(payload: unknown): {
   candidates: RegionCandidate[];
   notice?: string;
-  invalidResponse?: boolean;
+  failure?: JusoResponseFailure;
 } {
   if (!payload || typeof payload !== 'object') {
-    return { candidates: [], notice: '도로명주소 API 응답 형식을 해석할 수 없습니다.', invalidResponse: true };
+    return {
+      candidates: [],
+      notice: '도로명주소 API 응답 형식을 해석할 수 없습니다.',
+      failure: { status: 'LIVE_DATA_UNAVAILABLE', reasonCode: 'API_RESPONSE_INVALID', retryable: true }
+    };
   }
 
   const results = (payload as { results?: unknown }).results;
   if (!results || typeof results !== 'object') {
-    return { candidates: [], notice: '도로명주소 API 응답에 results가 없습니다.', invalidResponse: true };
-  }
-
-  const common = (results as { common?: { errorCode?: string; errorMessage?: string } }).common;
-  if (common?.errorCode && common.errorCode !== '0') {
     return {
       candidates: [],
-      notice: `도로명주소 API가 오류를 반환했습니다. errorCode=${common.errorCode}${
-        common.errorMessage ? `, message=${common.errorMessage}` : ''
+      notice: '도로명주소 API 응답에 results가 없습니다.',
+      failure: { status: 'LIVE_DATA_UNAVAILABLE', reasonCode: 'API_RESPONSE_INVALID', retryable: true }
+    };
+  }
+
+  const common = (results as { common?: { errorCode?: string | number; errorMessage?: string } }).common;
+  const errorCode = common?.errorCode === undefined ? undefined : String(common.errorCode);
+  if (errorCode && errorCode !== '0') {
+    return {
+      candidates: [],
+      notice: `도로명주소 API가 오류를 반환했습니다. errorCode=${errorCode}${
+        common?.errorMessage ? `, message=${common.errorMessage}` : ''
       }`,
-      invalidResponse: true
+      failure: classifyJusoBodyError(errorCode)
     };
   }
 
@@ -137,7 +181,10 @@ function parseJusoCandidates(payload: unknown): {
   return {
     candidates,
     notice: candidates.length > 0 ? undefined : '도로명주소 API 응답에서 lawdCode를 추출할 수 있는 주소 후보가 없습니다.',
-    invalidResponse: candidates.length === 0
+    failure:
+      candidates.length === 0
+        ? { status: 'LIVE_DATA_UNAVAILABLE', reasonCode: 'API_RESPONSE_INVALID', retryable: true }
+        : undefined
   };
 }
 
@@ -177,11 +224,7 @@ export class LiveJusoAddressClient implements JusoAddressClient {
     }
     const parsed = parseJusoCandidates(payload);
     if (parsed.candidates.length === 0) {
-      return emptyResult(parsed.notice ?? '도로명주소 API 조회 결과가 없습니다.',
-        parsed.invalidResponse
-          ? { status: 'LIVE_DATA_UNAVAILABLE', reasonCode: 'API_RESPONSE_INVALID', retryable: true }
-          : undefined
-      );
+      return emptyResult(parsed.notice ?? '도로명주소 API 조회 결과가 없습니다.', parsed.failure);
     }
 
     return {

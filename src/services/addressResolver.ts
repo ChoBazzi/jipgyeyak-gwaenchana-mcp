@@ -1,5 +1,11 @@
 import { loadConfig } from '../config.js';
-import { CONTRACT_CHECK_DISCLAIMER, type AddressResolution, type HousingType, type RegionCandidate } from '../domain/types.js';
+import {
+  CONTRACT_CHECK_DISCLAIMER,
+  type AddressClarificationOption,
+  type AddressResolution,
+  type HousingType,
+  type RegionCandidate
+} from '../domain/types.js';
 import { FallbackJusoAddressClient, type JusoAddressClient } from './jusoAddressClient.js';
 
 const ADDRESS_MATCH_NOTICE =
@@ -95,7 +101,7 @@ const LOCAL_REGION_INDEX: Array<RegionCandidate & { keywords: string[] }> = [
     eupmyeondong: '',
     confidence: 'medium',
     matchReason: '부산 해운대구 행정구역 키워드 매칭',
-    keywords: ['해운대구', '해운대', '우동', '중동']
+    keywords: ['해운대구', '해운대']
   }
 ];
 
@@ -104,7 +110,17 @@ function normalizeAddress(address: string): string {
 }
 
 function toCandidate(region: RegionCandidate & { keywords: string[] }, compactAddress: string): RegionCandidate {
-  const matchedKeyword = region.keywords.find((keyword) => compactAddress.includes(keyword.replace(/\s/g, '')));
+  const matchedKeywords = region.keywords.filter((keyword) => compactAddress.includes(keyword.replace(/\s/g, '')));
+  const canonicalLegalDong = matchedKeywords
+    .map((keyword) => {
+      if (/(?:동\d*가?|읍|면)$/u.test(keyword)) return keyword;
+      return region.keywords.find((candidate) =>
+        [`${keyword}동`, `${keyword}읍`, `${keyword}면`].includes(candidate)
+      );
+    })
+    .filter((value): value is string => Boolean(value))
+    .sort((a, b) => b.length - a.length)[0];
+  const matchedKeyword = canonicalLegalDong ?? matchedKeywords.sort((a, b) => b.length - a.length)[0];
 
   return {
     regionName: region.regionName,
@@ -112,8 +128,8 @@ function toCandidate(region: RegionCandidate & { keywords: string[] }, compactAd
     legalDongCode: region.legalDongCode,
     sido: region.sido,
     sigungu: region.sigungu,
-    eupmyeondong: matchedKeyword ?? region.eupmyeondong,
-    confidence: matchedKeyword === region.sigungu ? 'medium' : 'high',
+    eupmyeondong: canonicalLegalDong ?? region.eupmyeondong,
+    confidence: canonicalLegalDong ? 'high' : 'medium',
     matchReason: matchedKeyword ? `${matchedKeyword} 행정구역 키워드 매칭` : region.matchReason,
     source: 'local'
   };
@@ -125,15 +141,160 @@ function findLocalCandidates(compactAddress: string): RegionCandidate[] {
   ).map((region) => toCandidate(region, compactAddress));
 }
 
-function shouldPreferLocalIntent(compactAddress: string, localCandidates: RegionCandidate[], jusoCandidates: RegionCandidate[]): boolean {
-  if (localCandidates.length === 0) return false;
+function normalizeForMatch(value: string): string {
+  return value
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/\([^)]*\)/g, '')
+    .replace(/\s+/g, '')
+    .trim();
+}
 
-  const localLawdCodes = new Set(localCandidates.map((candidate) => candidate.lawdCode));
-  if (jusoCandidates.some((candidate) => localLawdCodes.has(candidate.lawdCode))) return false;
+function exactAddressCandidates(address: string, candidates: RegionCandidate[]): RegionCandidate[] {
+  const requestedAddress = normalizeForMatch(address);
+  return candidates.filter((candidate) =>
+    [candidate.roadAddress, candidate.jibunAddress]
+      .filter((value): value is string => Boolean(value))
+      .some((value) => normalizeForMatch(value) === requestedAddress)
+  );
+}
 
-  const hasPangyoIntent = compactAddress.includes('판교') && !compactAddress.includes('안양판교로');
-  const hasBundangCandidate = localCandidates.some((candidate) => candidate.lawdCode === '41135');
-  return hasPangyoIntent && hasBundangCandidate;
+const ADMINISTRATIVE_SUFFIX_PATTERN = /(특별자치시|특별자치도|특별시|광역시|도|시|군|구|읍|면|동)$/u;
+
+interface AdministrativeInput {
+  compactAddress: string;
+  tokens: Set<string>;
+}
+
+function administrativeInput(address: string): AdministrativeInput {
+  const tokens = address
+    .normalize('NFKC')
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .map((token) => token.trim())
+    .filter(Boolean);
+  return { compactAddress: normalizeForMatch(address), tokens: new Set(tokens) };
+}
+
+function candidateMatchesAdministrativeLevel(
+  input: AdministrativeInput,
+  candidate: RegionCandidate,
+  selector: (value: RegionCandidate) => string
+): boolean {
+  return selector(candidate)
+    .split(/\s+/)
+    .filter(Boolean)
+    .some((part) => {
+      const fullName = normalizeForMatch(part);
+      if (fullName.length >= 2 && input.compactAddress.includes(fullName)) return true;
+
+      const shortName = normalizeForMatch(part.replace(ADMINISTRATIVE_SUFFIX_PATTERN, ''));
+      return shortName.length >= 2 && input.tokens.has(shortName);
+    });
+}
+
+function narrowByAdministrativeHints(address: string, candidates: RegionCandidate[]): RegionCandidate[] {
+  const input = administrativeInput(address);
+  const selectors: Array<(candidate: RegionCandidate) => string> = [
+    (candidate) => candidate.sido,
+    (candidate) => candidate.sigungu,
+    (candidate) => candidate.eupmyeondong
+  ];
+  return selectors.reduce((current, selector) => {
+    const matched = current.filter((candidate) =>
+      candidateMatchesAdministrativeLevel(input, candidate, selector)
+    );
+    return matched.length > 0 ? matched : current;
+  }, candidates);
+}
+
+function hasHigherLevelAdministrativeHint(address: string, candidates: RegionCandidate[]): boolean {
+  const input = administrativeInput(address);
+  return candidates.some(
+    (candidate) =>
+      candidateMatchesAdministrativeLevel(input, candidate, (value) => value.sido) ||
+      candidateMatchesAdministrativeLevel(input, candidate, (value) => value.sigungu)
+  );
+}
+
+const EXPLICIT_LOCALITY_PATTERN = /(?:읍|면|동|가)$/u;
+
+function explicitLocalityTokens(address: string): string[] {
+  return [...administrativeInput(address).tokens].filter(
+    (token) => token.length >= 2 && EXPLICIT_LOCALITY_PATTERN.test(token)
+  );
+}
+
+function candidateMatchesExplicitLocality(candidate: RegionCandidate, localityTokens: string[]): boolean {
+  const candidateLocality = normalizeForMatch(candidate.eupmyeondong);
+  if (!candidateLocality) return false;
+  return localityTokens.some(
+    (token) => candidateLocality === token || candidateLocality.startsWith(token) || token.startsWith(candidateLocality)
+  );
+}
+
+function distinctLawdCodes(candidates: RegionCandidate[]): Set<string> {
+  return new Set(candidates.map((candidate) => candidate.lawdCode));
+}
+
+function uniqueCandidates(candidates: RegionCandidate[]): RegionCandidate[] {
+  const seen = new Set<string>();
+  return candidates.filter((candidate) => {
+    const key = [
+      candidate.lawdCode,
+      candidate.eupmyeondong,
+      candidate.roadAddress ?? '',
+      candidate.jibunAddress ?? '',
+      candidate.source ?? ''
+    ].join('|');
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function clarificationOptions(candidates: RegionCandidate[]): AddressClarificationOption[] {
+  const options = new Map<string, AddressClarificationOption>();
+  for (const candidate of candidates) {
+    const key = `${candidate.lawdCode}|${candidate.eupmyeondong}`;
+    if (!options.has(key)) {
+      options.set(key, {
+        regionName: candidate.regionName,
+        lawdCode: candidate.lawdCode,
+        eupmyeondong: candidate.eupmyeondong
+      });
+    }
+  }
+  return [...options.values()].slice(0, 5);
+}
+
+function ambiguousAddressResult(options: {
+  normalizedAddress: string;
+  candidates: RegionCandidate[];
+  source: 'local' | 'juso';
+  dataNotice: string;
+}): AddressResolution {
+  const candidates = uniqueCandidates(options.candidates);
+  const clarificationQuestion = `입력한 "${options.normalizedAddress}"만으로는 어느 지역인지 확정하기 어렵습니다. 후보의 시·군·구 또는 정확한 도로명·지번주소를 포함해 다시 입력해 주세요.`;
+
+  return {
+    normalizedAddress: options.normalizedAddress,
+    normalizedRegionName: null,
+    lawdCode: null,
+    candidates,
+    source: options.source,
+    lookupStatus: 'AMBIGUOUS',
+    lookupReasonCode: 'MULTIPLE_ADDRESS_MATCHES',
+    retryable: false,
+    nextActions: [
+      '도로명주소나 지번주소를 더 구체적으로 입력하세요.',
+      '시·군·구 또는 정확한 도로명·지번주소를 포함해 다시 입력하세요.'
+    ],
+    clarificationQuestion,
+    clarificationOptions: clarificationOptions(candidates),
+    dataNotice: joinNotices(options.dataNotice, '주소 후보를 임의로 선택하지 않았습니다.'),
+    disclaimer: CONTRACT_CHECK_DISCLAIMER
+  };
 }
 
 function joinNotices(...notices: Array<string | undefined>): string {
@@ -170,34 +331,47 @@ export async function resolveAddressRegion(
   const localCandidates = findLocalCandidates(compactAddress);
 
   if (jusoResult.candidates.length > 0) {
-    if (shouldPreferLocalIntent(compactAddress, localCandidates, jusoResult.candidates)) {
-      const primary = localCandidates[0] ?? null;
+    const exactCandidates = exactAddressCandidates(normalizedAddress, jusoResult.candidates);
+    const hasExactAddress = exactCandidates.length > 0;
+    const narrowedCandidates = hasExactAddress
+      ? exactCandidates
+      : narrowByAdministrativeHints(normalizedAddress, jusoResult.candidates);
+    const localityTokens = explicitLocalityTokens(normalizedAddress);
+    const matchingLocalityCandidates = jusoResult.candidates.filter((candidate) =>
+      candidateMatchesExplicitLocality(candidate, localityTokens)
+    );
+    const hasExplicitLocalityConflict =
+      !hasExactAddress &&
+      localityTokens.length > 0 &&
+      !narrowedCandidates.some((candidate) => candidateMatchesExplicitLocality(candidate, localityTokens));
+    const jusoDecisionCandidates = hasExplicitLocalityConflict
+      ? uniqueCandidates([...narrowedCandidates, ...matchingLocalityCandidates])
+      : narrowedCandidates;
+    const decisionCandidates = hasExactAddress
+      ? jusoDecisionCandidates
+      : uniqueCandidates([...jusoDecisionCandidates, ...localCandidates]);
+    const hasConflictingRegions = distinctLawdCodes(decisionCandidates).size > 1;
+    const needsBareInputConfirmation =
+      !hasExactAddress &&
+      jusoResult.candidates.length > 1 &&
+      !hasHigherLevelAdministrativeHint(normalizedAddress, jusoResult.candidates);
 
-      return {
+    if (hasConflictingRegions || needsBareInputConfirmation || hasExplicitLocalityConflict) {
+      return ambiguousAddressResult({
         normalizedAddress,
-        normalizedRegionName: primary?.regionName ?? null,
-        lawdCode: primary?.lawdCode ?? null,
-        candidates: localCandidates,
-        source: 'local',
-        lookupStatus: 'MATCHED',
-        lookupReasonCode: 'LOCAL_MATCH_FOUND',
-        retryable: false,
-        nextActions: ['도로명주소나 지번주소를 함께 입력해 주소 후보를 다시 확인하세요.'],
-        dataNotice: joinNotices(
-          jusoResult.dataNotice,
-          '도로명주소 API 후보가 입력한 지역 의도와 달라 내장 행정구역 키워드 매핑을 우선했습니다. 더 정확한 비교를 위해 도로명주소나 지번주소를 함께 입력하세요.'
-        ),
-        disclaimer: CONTRACT_CHECK_DISCLAIMER
-      };
+        candidates: decisionCandidates,
+        source: 'juso',
+        dataNotice: jusoResult.dataNotice
+      });
     }
 
-    const primary = jusoResult.candidates[0] ?? null;
+    const primary = narrowedCandidates[0] ?? null;
 
     return {
       normalizedAddress,
       normalizedRegionName: primary?.regionName ?? null,
       lawdCode: primary?.lawdCode ?? null,
-      candidates: jusoResult.candidates,
+      candidates: narrowedCandidates,
       source: 'juso',
       lookupStatus: 'MATCHED',
       lookupReasonCode: 'MATCHES_FOUND',
@@ -206,6 +380,15 @@ export async function resolveAddressRegion(
       dataNotice: jusoResult.dataNotice,
       disclaimer: CONTRACT_CHECK_DISCLAIMER
     };
+  }
+
+  if (distinctLawdCodes(localCandidates).size > 1) {
+    return ambiguousAddressResult({
+      normalizedAddress,
+      candidates: localCandidates,
+      source: 'local',
+      dataNotice: jusoResult.dataNotice
+    });
   }
 
   const primary = localCandidates[0] ?? null;

@@ -35,7 +35,7 @@ function buildSignals(comparison: ContractComparison): CheckSignal[] {
   if (status === 'LIVE_DATA_UNAVAILABLE') {
     signals.push({
       code: 'LIVE_DATA_UNAVAILABLE',
-      label: '실시간 공공데이터 확인 필요',
+      label: '공공데이터 API 조회 확인 필요',
       detail: comparison.dataNotice || '국토교통부 공공데이터를 조회하지 못했습니다.',
       suggestedVerification:
         comparison.nextActions?.[0] ?? '잠시 후 다시 조회하고, 계속 실패하면 공공데이터 API 설정을 확인하세요.'
@@ -51,11 +51,43 @@ function buildSignals(comparison: ContractComparison): CheckSignal[] {
     });
   }
 
+  if (status === 'COMPARED' && comparison.comparisonScope !== 'SAME_REPORTED_PROPERTY') {
+    signals.push({
+      code:
+        comparison.comparisonScope === 'REQUESTED_PROPERTY_REFERENCE'
+          ? 'PROPERTY_NAME_UNVERIFIED'
+          : 'REGIONAL_REFERENCE_ONLY',
+      label:
+        comparison.comparisonScope === 'REQUESTED_PROPERTY_REFERENCE'
+          ? '입력 건물·단지명 검증 필요'
+          : '지역 참고자료로만 확인',
+      detail: comparison.scopeReason,
+      suggestedVerification: '정확한 도로명·지번주소와 공식 건물·단지명을 확인한 뒤 다시 비교하세요.'
+    });
+  }
+
+  if (
+    status === 'COMPARED' &&
+    comparison.comparisonScope === 'SAME_REPORTED_PROPERTY' &&
+    comparison.confidence !== 'HIGH'
+  ) {
+    signals.push({
+      code: 'LOW_COMPARISON_CONFIDENCE',
+      label: '비교 신뢰도 추가 확인 필요',
+      detail: comparison.confidenceReasons.join(' '),
+      suggestedVerification: '최근 동일 신고 건물·단지명 자료의 표본 수, 조회 완료 여부, 금액 분산을 함께 확인하세요.'
+    });
+  }
+
   const depositDiff = comparison.depositKrw.differencePercentFromMedian;
   const rentDiff = comparison.monthlyRentKrw.differencePercentFromMedian;
   const isWolse = comparison.monthlyRentKrw.input > 0;
+  const hasVerifiedPropertyScope =
+    status === 'COMPARED' && comparison.comparisonScope === 'SAME_REPORTED_PROPERTY';
+  const canInterpretPriceDifference =
+    hasVerifiedPropertyScope && comparison.searchComplete && comparison.confidence === 'HIGH';
 
-  if (!isWolse && depositDiff !== null && Math.abs(depositDiff) >= 25) {
+  if (!isWolse && canInterpretPriceDifference && depositDiff !== null && Math.abs(depositDiff) >= 25) {
     signals.push({
       code: 'DEPOSIT_OUTSIDE_COMPARABLE_RANGE',
       label: '보증금 차이 확인 필요',
@@ -64,20 +96,20 @@ function buildSignals(comparison: ContractComparison): CheckSignal[] {
     });
   }
 
-  if (
-    isWolse &&
-    ((depositDiff !== null && Math.abs(depositDiff) >= 25) || (rentDiff !== null && Math.abs(rentDiff) >= 25))
-  ) {
-    const differences = [
-      depositDiff === null ? null : `보증금 ${depositDiff >= 0 ? '+' : ''}${depositDiff}%`,
-      rentDiff === null ? null : `월세 ${rentDiff >= 0 ? '+' : ''}${rentDiff}%`
-    ].filter((value): value is string => value !== null);
+  if (isWolse && hasVerifiedPropertyScope && comparison.monthlyRentKrw.comparableSampleCount < 3) {
+    signals.push({
+      code: 'WOLSE_COMPARISON_LIMITED',
+      label: '월세 조건 비교 표본 부족',
+      detail: `입력 보증금과 차이가 ${comparison.monthlyRentKrw.maximumDepositDifferencePercent}% 이내인 월세 표본은 ${comparison.monthlyRentKrw.comparableSampleCount}건입니다. 보증금 수준이 다른 거래의 월세는 직접 비교하지 않았습니다.`,
+      suggestedVerification: '비슷한 보증금·면적의 최근 월세 계약 사례와 관리비·옵션 차이를 추가로 확인하세요.'
+    });
+  } else if (isWolse && canInterpretPriceDifference && rentDiff !== null && Math.abs(rentDiff) >= 25) {
     signals.push({
       code: 'WOLSE_TERMS_DIFFER_FROM_MEDIAN',
       label: '월세 조건 조합 확인 필요',
-      detail: `입력 조건은 유사 표본 중앙값 대비 ${differences.join(', ')}입니다. 두 금액을 각각 비교한 참고값입니다.`,
+      detail: `입력 월세가 비슷한 보증금의 유사 표본 중앙값 대비 ${rentDiff >= 0 ? '+' : ''}${rentDiff}%입니다.`,
       suggestedVerification:
-        '보증금과 월세를 전월세전환율로 환산해 함께 비교하고 관리비, 옵션, 계약기간 차이도 확인하세요.'
+        '관리비, 옵션, 층·향, 계약기간 차이를 확인하고 같은 보증금 수준의 최근 계약 사례를 요청하세요.'
     });
   }
 
@@ -90,7 +122,58 @@ function buildSignals(comparison: ContractComparison): CheckSignal[] {
     });
   }
 
+  const saleAssessment = comparison.salePriceAssessment;
+  if (comparison.comparisonScope === 'SAME_REPORTED_PROPERTY' && comparison.depositKrw.input > 0) {
+    if (saleAssessment.status !== 'ASSESSED') {
+      signals.push({
+        code: 'SALE_PRICE_REFERENCE_UNAVAILABLE',
+        label: '동일 신고 건물·단지명 매매가 별도 확인 필요',
+        detail: saleAssessment.dataNotice,
+        suggestedVerification: '동일 신고 건물·단지명과 비슷한 면적의 최근 매매 실거래가 및 현재 권리관계를 별도로 확인하세요.'
+      });
+    } else if (saleAssessment.sampleCount < 3 || !saleAssessment.searchComplete) {
+      signals.push({
+        code: 'SALE_PRICE_REFERENCE_LIMITED',
+        label: '매매가 비교 표본 부족',
+        detail: `동일 신고 건물·단지명 매매 표본은 ${saleAssessment.sampleCount}건이며 전체 검색 완료 여부는 ${saleAssessment.searchComplete ? '완료' : '미완료'}입니다.`,
+        suggestedVerification: '조회 기간을 넓히고 동일 신고 건물·단지명과 비슷한 면적의 최근 매매 신고자료를 추가로 확인하세요.'
+      });
+    }
+
+    const canInterpretSaleRatio =
+      saleAssessment.status === 'ASSESSED' &&
+      saleAssessment.sampleCount >= 3 &&
+      saleAssessment.searchComplete;
+    if (
+      canInterpretSaleRatio &&
+      saleAssessment.depositToMedianSalePricePercent !== null &&
+      saleAssessment.depositToMedianSalePricePercent >= 80
+    ) {
+      signals.push({
+        code: 'DEPOSIT_TO_SALE_PRICE_CHECK',
+        label: '보증금과 매매가 수준 추가 확인',
+        detail: `입력 보증금은 동일 신고 건물·단지명 유사 면적 매매가 중앙값의 ${saleAssessment.depositToMedianSalePricePercent}%입니다. ${saleAssessment.comparisonThresholdNotice}`,
+        suggestedVerification: '선순위 권리와 다른 임차인의 보증금, 보증보험 가입 가능 여부를 최신 서류와 취급기관 기준으로 확인하세요.'
+      });
+    }
+  }
+
   return signals;
+}
+
+function screeningSummary(comparison: ContractComparison): string {
+  switch (comparison.screeningOutcome) {
+    case 'NO_ADDITIONAL_PRICE_SIGNAL_FOUND':
+      return '도로명주소에서 확인한 건물·단지명의 공공데이터 가격 조건 비교에서는 추가 확인이 필요한 특이 신호가 확인되지 않았습니다. 이는 계약 안전이나 권리관계를 확인한 결과가 아니므로 등기부등본과 보증보험 가능 여부는 별도로 확인해야 합니다.';
+    case 'ADDITIONAL_VERIFICATION_REQUIRED':
+      return '유사 신고자료의 조건 차이 또는 비교 품질 때문에 계약 전에 추가 확인이 필요합니다. 아래 확인 신호와 질문을 검토하세요.';
+    case 'INSUFFICIENT_INFORMATION':
+      return comparison.comparisonScope === 'REQUESTED_PROPERTY_REFERENCE' ||
+        comparison.comparisonScope === 'SAME_LEGAL_DONG' ||
+        comparison.comparisonScope === 'DISTRICT_REFERENCE'
+        ? '정확한 건물을 기준으로 계약 조건을 1차 점검하기에는 정보가 부족합니다. 현재 결과는 지역 참고자료이며 공식 건물명이나 상세 주소로 다시 확인하세요.'
+        : '계약 조건을 1차 점검하기에는 비교 정보가 부족합니다. 주소, 검증된 신고 건물·단지명 표본 또는 공공데이터 조회 상태를 보완한 뒤 다시 확인하세요.';
+  }
 }
 
 export async function detectPrecontractCheckSignals(
@@ -102,6 +185,8 @@ export async function detectPrecontractCheckSignals(
   const checkSignals = buildSignals(comparison);
 
   return {
+    screeningOutcome: comparison.screeningOutcome,
+    screeningSummary: screeningSummary(comparison),
     checkSignals,
     itemsToVerify: [
       '등기부등본의 소유자, 근저당권, 압류/가압류 등 권리관계',
@@ -109,6 +194,12 @@ export async function detectPrecontractCheckSignals(
       '중개대상물 확인설명서와 계약서 특약의 불일치 여부',
       '전입신고/확정일자 가능 시점과 보증보험 가입 가능 여부',
       '관리비 항목과 포함/별도 비용'
+    ],
+    notAutomaticallyVerifiedItems: [
+      '등기부등본의 현재 소유자와 근저당권·압류·가압류는 자동으로 확인하지 않습니다.',
+      '건축물대장의 위반건축물 표시와 실제 세대 구분은 자동으로 확인하지 않습니다.',
+      '전입신고·확정일자 가능 여부와 보증보험 가입 가능 여부는 자동으로 확인하지 않습니다.',
+      '임대인의 신원·계약 권한과 계약서 특약의 효력은 자동으로 확인하지 않습니다.'
     ],
     comparison,
     disclaimer: CONTRACT_CHECK_DISCLAIMER

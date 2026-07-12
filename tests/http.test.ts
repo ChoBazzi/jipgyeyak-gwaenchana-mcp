@@ -78,6 +78,36 @@ describe('HTTP MCP server', () => {
     });
   });
 
+  it('enforces cross-field contract validation at the MCP tool boundary', async () => {
+    const response = await fetch(`${baseUrl}/mcp`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream'
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'tools/call',
+        params: {
+          name: 'compare_contract_terms',
+          arguments: {
+            address: '서울특별시 강남구 역삼동 101-1',
+            housingType: 'apartment',
+            depositKrw: 0,
+            monthlyRentKrw: 0,
+            areaM2: 76
+          }
+        }
+      })
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain('"isError":true');
+    expect(body).toContain('보증금과 월세가 동시에 0원일 수 없습니다.');
+  });
+
   it('limits repeated public MCP requests before they can exhaust external API quota', async () => {
     const limitedApp = createHttpApp(
       loadConfig({

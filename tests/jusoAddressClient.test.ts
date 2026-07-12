@@ -136,6 +136,46 @@ describe('LiveJusoAddressClient', () => {
       retryable: false
     });
   });
+
+  it.each([
+    ['E0001', '승인되지 않은 KEY입니다.', 'LIVE_DATA_UNAVAILABLE', 'API_AUTH_ERROR', false],
+    ['E0014', '승인키가 만료되었습니다.', 'LIVE_DATA_UNAVAILABLE', 'API_AUTH_ERROR', false],
+    ['E0006', '주소를 상세히 입력해 주시기 바랍니다.', 'NO_MATCHES', 'INVALID_REQUEST', false],
+    ['-999', '시스템 오류입니다.', 'LIVE_DATA_UNAVAILABLE', 'API_REQUEST_FAILED', true],
+    [-999, '시스템 오류입니다.', 'LIVE_DATA_UNAVAILABLE', 'API_REQUEST_FAILED', true],
+    ['E9999', '알 수 없는 오류입니다.', 'LIVE_DATA_UNAVAILABLE', 'API_RESPONSE_INVALID', true]
+  ] as const)(
+    'classifies Juso body error %s',
+    async (errorCode, errorMessage, expectedStatus, expectedReasonCode, expectedRetryable) => {
+      globalThis.fetch = vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              results: {
+                common: { errorCode, errorMessage, totalCount: '0' },
+                juso: []
+              }
+            }),
+            { status: 200 }
+          )
+      );
+      const client = new LiveJusoAddressClient({
+        apiKey: 'juso-key',
+        baseUrl: 'https://business.juso.go.kr/addrlink/addrLinkApi.do',
+        timeoutMs: 3000
+      });
+
+      const result = await client.searchAddress('테스트 주소');
+
+      expect(result).toMatchObject({
+        candidates: [],
+        status: expectedStatus,
+        reasonCode: expectedReasonCode,
+        retryable: expectedRetryable
+      });
+      expect(result.dataNotice).toContain(`errorCode=${errorCode}`);
+    }
+  );
 });
 
 describe('FallbackJusoAddressClient', () => {

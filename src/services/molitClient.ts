@@ -5,12 +5,16 @@ import {
   type ComparableReasonCode,
   type ComparableSearchInput,
   type ComparableSearchResult,
-  type RentDeal
+  type RentDeal,
+  type SaleComparableSearchInput,
+  type SaleComparableSearchResult
 } from '../domain/types.js';
 import { assertValidDealYmdRange } from '../utils/date.js';
+import { FallbackMolitSaleClient } from './molitSaleClient.js';
 
 export interface MolitRentClient {
   searchRentComparables(input: ComparableSearchInput): Promise<ComparableSearchResult>;
+  searchSaleComparables?(input: SaleComparableSearchInput): Promise<SaleComparableSearchResult>;
 }
 
 interface MolitFailure {
@@ -33,7 +37,7 @@ function unavailableResult(options: MolitFailure & { message: string; nextAction
   return {
     source: 'unavailable',
     requiresLiveData: true,
-    status: 'LIVE_DATA_UNAVAILABLE',
+    status: options.reasonCode === 'INVALID_REQUEST' ? 'INVALID_REQUEST' : 'LIVE_DATA_UNAVAILABLE',
     reasonCode: options.reasonCode,
     retryable: options.retryable,
     nextActions: options.nextActions,
@@ -262,7 +266,11 @@ function matchesComplexName(requestedName: string, actualName: string | undefine
   const actual = actualName ? normalizeComplexName(actualName) : '';
   if (!actual) return false;
 
-  return actual.includes(requested);
+  return actual === requested;
+}
+
+function normalizeLegalDongName(value: string): string {
+  return value.normalize('NFKC').toLowerCase().replace(/\s+/g, '').trim();
 }
 
 function filterLiveDeals(
@@ -273,9 +281,14 @@ function filterLiveDeals(
   const afterContractType = input.contractType
     ? deals.filter((deal) => deal.contractType === input.contractType)
     : deals;
-  const afterComplexName = input.complexName
-    ? afterContractType.filter((deal) => matchesComplexName(input.complexName ?? '', deal.complexName))
+  const afterLegalDong = input.legalDongName
+    ? afterContractType.filter(
+        (deal) => normalizeLegalDongName(deal.regionName) === normalizeLegalDongName(input.legalDongName ?? '')
+      )
     : afterContractType;
+  const afterComplexName = input.complexName
+    ? afterLegalDong.filter((deal) => matchesComplexName(input.complexName ?? '', deal.complexName))
+    : afterLegalDong;
   const afterArea =
     input.areaM2 !== undefined
       ? afterComplexName.filter((deal) => Math.abs(deal.areaM2 - input.areaM2!) <= tolerance)
@@ -286,6 +299,7 @@ function filterLiveDeals(
     filterStats: {
       raw: deals.length,
       afterContractType: afterContractType.length,
+      afterLegalDong: afterLegalDong.length,
       afterComplexName: afterComplexName.length,
       afterArea: afterArea.length
     }
@@ -295,6 +309,7 @@ function filterLiveDeals(
 function noMatchReason(input: ComparableSearchInput, stats: ComparableFilterStats): ComparableReasonCode {
   if (stats.raw === 0) return 'NO_REPORTED_DEALS';
   if (input.contractType && stats.afterContractType === 0) return 'NO_CONTRACT_TYPE_MATCH';
+  if (input.legalDongName && stats.afterLegalDong === 0) return 'NO_LEGAL_DONG_MATCH';
   if (input.complexName && stats.afterComplexName === 0) return 'NO_COMPLEX_MATCH';
   if (input.areaM2 !== undefined && stats.afterArea === 0) return 'NO_AREA_MATCH';
   return 'NO_REPORTED_DEALS';
@@ -304,6 +319,8 @@ function noMatchNextActions(reasonCode: ComparableReasonCode): string[] {
   switch (reasonCode) {
     case 'NO_CONTRACT_TYPE_MATCH':
       return ['전세 또는 월세 조건이 맞는지 확인해 다시 조회하세요.'];
+    case 'NO_LEGAL_DONG_MATCH':
+      return ['법정동이 정확한지 확인하거나 도로명·지번주소를 더 구체적으로 입력하세요.'];
     case 'NO_COMPLEX_MATCH':
       return ['단지명을 빼거나 공식 단지명으로 바꿔 다시 조회하세요.'];
     case 'NO_AREA_MATCH':
@@ -317,6 +334,8 @@ function noMatchNotice(reasonCode: ComparableReasonCode, stats: ComparableFilter
   switch (reasonCode) {
     case 'NO_CONTRACT_TYPE_MATCH':
       return `국토교통부 Open API 조회는 성공했고 신고자료 ${stats.raw}건을 확인했지만 요청한 전세/월세 유형과 일치하는 자료가 없습니다.`;
+    case 'NO_LEGAL_DONG_MATCH':
+      return `국토교통부 Open API 조회는 성공했고 계약 유형에 맞는 자료 ${stats.afterContractType}건을 확인했지만 요청한 법정동과 일치하는 자료가 없습니다.`;
     case 'NO_COMPLEX_MATCH':
       return `국토교통부 Open API 조회는 성공했고 계약 유형에 맞는 자료 ${stats.afterContractType}건을 확인했지만 요청한 단지명과 일치하는 자료가 없습니다.`;
     case 'NO_AREA_MATCH':
@@ -504,8 +523,10 @@ export class LiveMolitRentClient implements MolitRentClient {
 
 export class FallbackMolitRentClient implements MolitRentClient {
   private readonly liveClient?: LiveMolitRentClient;
+  private readonly saleClient: FallbackMolitSaleClient;
 
   constructor(options: { apiKey?: string; baseUrl?: string; timeoutMs?: number; totalTimeoutMs?: number }) {
+    this.saleClient = new FallbackMolitSaleClient(options);
     if (options.apiKey && options.baseUrl) {
       this.liveClient = new LiveMolitRentClient({
         apiKey: options.apiKey,
@@ -516,6 +537,10 @@ export class FallbackMolitRentClient implements MolitRentClient {
     }
   }
 
+  async searchSaleComparables(input: SaleComparableSearchInput): Promise<SaleComparableSearchResult> {
+    return this.saleClient.searchSaleComparables(input);
+  }
+
   async searchRentComparables(input: ComparableSearchInput): Promise<ComparableSearchResult> {
     if (!this.liveClient) {
       const reasonCode = 'API_KEY_MISSING';
@@ -524,7 +549,7 @@ export class FallbackMolitRentClient implements MolitRentClient {
         retryable: false,
         nextActions: unavailableNextActions(reasonCode, false),
         message:
-          'MOLIT_OPEN_DATA_API_KEY가 없어 실시간 신고자료를 조회할 수 없습니다. 지금은 비교에 필요한 정보가 부족합니다.'
+          'MOLIT_OPEN_DATA_API_KEY가 없어 공공데이터 API 신고자료를 조회할 수 없습니다. 지금은 비교에 필요한 정보가 부족합니다.'
       });
     }
 

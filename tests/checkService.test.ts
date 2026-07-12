@@ -1,24 +1,67 @@
-import { afterEach, describe, expect, it } from 'vitest';
-import type { ComparableSearchResult } from '../src/domain/types.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { ComparableSearchResult, SaleComparableSearchResult } from '../src/domain/types.js';
 import { detectPrecontractCheckSignals } from '../src/services/checkService.js';
 import type { MolitRentClient } from '../src/services/molitClient.js';
 
 const originalJusoApiKey = process.env.JUSO_API_KEY;
+const originalJusoApiBaseUrl = process.env.JUSO_API_BASE_URL;
+const originalFetch = globalThis.fetch;
 
-function mockRentClient(result: ComparableSearchResult): MolitRentClient {
+function mockVerifiedPropertyAddress(): void {
+  process.env.JUSO_API_KEY = 'juso-key';
+  process.env.JUSO_API_BASE_URL = 'https://business.juso.go.kr/addrlink/addrLinkApi.do';
+  globalThis.fetch = vi.fn(
+    async () =>
+      new Response(
+        JSON.stringify({
+          results: {
+            common: { errorCode: '0', totalCount: '1' },
+            juso: [
+              {
+                roadAddr: '서울특별시 강남구 테스트로 1',
+                jibunAddr: '서울특별시 강남구 역삼동 1 역삼센트럴',
+                bdNm: '역삼센트럴',
+                siNm: '서울특별시',
+                sggNm: '강남구',
+                emdNm: '역삼동',
+                admCd: '1168010100',
+                bdMgtSn: '1168010100100010000000001'
+              }
+            ]
+          }
+        }),
+        { status: 200 }
+      )
+  );
+}
+
+function mockRentClient(
+  result: ComparableSearchResult,
+  saleResult?: SaleComparableSearchResult
+): MolitRentClient {
   return {
     async searchRentComparables() {
       return result;
-    }
+    },
+    ...(saleResult
+      ? {
+          async searchSaleComparables() {
+            return saleResult;
+          }
+        }
+      : {})
   };
 }
 
 afterEach(() => {
+  globalThis.fetch = originalFetch;
   if (originalJusoApiKey === undefined) {
     delete process.env.JUSO_API_KEY;
   } else {
     process.env.JUSO_API_KEY = originalJusoApiKey;
   }
+  if (originalJusoApiBaseUrl === undefined) delete process.env.JUSO_API_BASE_URL;
+  else process.env.JUSO_API_BASE_URL = originalJusoApiBaseUrl;
 });
 
 describe('detectPrecontractCheckSignals', () => {
@@ -60,9 +103,14 @@ describe('detectPrecontractCheckSignals', () => {
     );
 
     expect(result.checkSignals.map((signal) => signal.code)).toContain('LOW_SAMPLE_COUNT');
-    expect(result.checkSignals.map((signal) => signal.code)).toContain('WOLSE_TERMS_DIFFER_FROM_MEDIAN');
+    expect(result.checkSignals.map((signal) => signal.code)).toContain('PROPERTY_NAME_UNVERIFIED');
+    expect(result.checkSignals.map((signal) => signal.code)).not.toContain('WOLSE_COMPARISON_LIMITED');
+    expect(result.checkSignals.map((signal) => signal.code)).not.toContain('WOLSE_TERMS_DIFFER_FROM_MEDIAN');
     expect(result.checkSignals.map((signal) => signal.code)).not.toContain('DEPOSIT_OUTSIDE_COMPARABLE_RANGE');
     expect(result.itemsToVerify).toContain('등기부등본의 소유자, 근저당권, 압류/가압류 등 권리관계');
+    expect(result.notAutomaticallyVerifiedItems.join('\n')).toContain('등기부등본');
+    expect(result.screeningOutcome).toBe('INSUFFICIENT_INFORMATION');
+    expect(result.screeningSummary).toContain('정보가 부족');
     expect(JSON.stringify(result)).not.toContain('riskSignals');
     expect(JSON.stringify(result)).not.toContain('SEED');
     expect(result.disclaimer).toContain('법률, 금융, 세무 또는 투자 조언이 아니며');
@@ -94,5 +142,197 @@ describe('detectPrecontractCheckSignals', () => {
 
     expect(result.checkSignals.map((signal) => signal.code)).toContain('LIVE_DATA_UNAVAILABLE');
     expect(result.checkSignals.map((signal) => signal.code)).not.toContain('LOW_SAMPLE_COUNT');
+    expect(result.screeningOutcome).toBe('INSUFFICIENT_INFORMATION');
+  });
+
+  it('reports no additional price signal only for sufficient high-confidence property data', async () => {
+    mockVerifiedPropertyAddress();
+    const deals = Array.from({ length: 5 }, (_, index) => ({
+      id: `same-building-${index}`,
+      lawdCode: '11680',
+      regionName: '역삼동',
+      housingType: 'apartment' as const,
+      contractDate: `2026-07-0${index + 1}`,
+      contractType: 'jeonse' as const,
+      depositKrw: 490_000_000 + index * 5_000_000,
+      monthlyRentKrw: 0,
+      areaM2: 59.8,
+      complexName: '역삼센트럴',
+      source: 'live' as const
+    }));
+
+    const result = await detectPrecontractCheckSignals(
+      {
+        address: '서울특별시 강남구 역삼동 역삼센트럴',
+        housingType: 'apartment',
+        depositKrw: 500_000_000,
+        monthlyRentKrw: 0,
+        areaM2: 60,
+        complexName: '역삼센트럴'
+      },
+      mockRentClient(
+        {
+          source: 'live',
+          requiresLiveData: false,
+          status: 'MATCHES_FOUND',
+          reasonCode: 'MATCHES_FOUND',
+          retryable: false,
+          searchComplete: true,
+          requestedMonthCount: 12,
+          searchedMonthCount: 12,
+          dataNotice: '조회 완료',
+          totalMatched: deals.length,
+          deals,
+          disclaimer: 'test disclaimer'
+        },
+        {
+          source: 'live',
+          status: 'MATCHES_FOUND',
+          reasonCode: 'MATCHES_FOUND',
+          retryable: false,
+          nextActions: [],
+          searchComplete: true,
+          dataNotice: '매매 조회 완료',
+          totalMatched: 3,
+          deals: Array.from({ length: 3 }, (_, index) => ({
+            id: `sale-${index}`,
+            lawdCode: '11680',
+            regionName: '역삼동',
+            housingType: 'apartment' as const,
+            contractDate: `2026-07-0${index + 1}`,
+            salePriceKrw: 900_000_000 + index * 10_000_000,
+            areaM2: 59.8,
+            complexName: '역삼센트럴',
+            source: 'live' as const
+          })),
+          disclaimer: 'test disclaimer'
+        }
+      )
+    );
+
+    expect(result.screeningOutcome).toBe('NO_ADDITIONAL_PRICE_SIGNAL_FOUND');
+    expect(result.screeningSummary).toContain('공공데이터 가격 조건 비교');
+    expect(result.screeningSummary).toContain('계약 안전이나 권리관계를 확인한 결과가 아니');
+    expect(result.comparison).toMatchObject({ comparisonScope: 'SAME_REPORTED_PROPERTY', confidence: 'HIGH' });
+  });
+
+  it('does not treat legal-dong reference data as a contract-level screening result', async () => {
+    delete process.env.JUSO_API_KEY;
+    const result = await detectPrecontractCheckSignals(
+      {
+        address: '서울특별시 강남구 역삼동',
+        housingType: 'apartment',
+        depositKrw: 800_000_000,
+        monthlyRentKrw: 0,
+        areaM2: 60
+      },
+      mockRentClient({
+        source: 'live',
+        requiresLiveData: false,
+        status: 'MATCHES_FOUND',
+        reasonCode: 'MATCHES_FOUND',
+        retryable: false,
+        searchComplete: true,
+        requestedMonthCount: 12,
+        searchedMonthCount: 12,
+        dataNotice: '조회 완료',
+        totalMatched: 5,
+        deals: Array.from({ length: 5 }, (_, index) => ({
+          id: `regional-${index}`,
+          lawdCode: '11680',
+          regionName: '역삼동',
+          housingType: 'apartment' as const,
+          contractDate: `2026-07-0${index + 1}`,
+          contractType: 'jeonse' as const,
+          depositKrw: 490_000_000 + index * 5_000_000,
+          monthlyRentKrw: 0,
+          areaM2: 59.8,
+          complexName: `서로다른건물${index}`,
+          source: 'live' as const
+        })),
+        disclaimer: 'test disclaimer'
+      })
+    );
+
+    expect(result.screeningOutcome).toBe('INSUFFICIENT_INFORMATION');
+    expect(result.checkSignals.map((signal) => signal.code)).toContain('REGIONAL_REFERENCE_ONLY');
+    expect(result.checkSignals.map((signal) => signal.code)).not.toContain('DEPOSIT_OUTSIDE_COMPARABLE_RANGE');
+    expect(result.screeningSummary).toContain('정확한 건물');
+  });
+
+  it.each([
+    { saleCount: 3, expectsRatioSignal: true },
+    { saleCount: 1, expectsRatioSignal: false }
+  ])('gates a high deposit-to-sale ratio on sale data quality: $saleCount samples', async ({ saleCount, expectsRatioSignal }) => {
+    mockVerifiedPropertyAddress();
+    const rentDeals = Array.from({ length: 5 }, (_, index) => ({
+      id: `rent-high-deposit-${index}`,
+      lawdCode: '11680',
+      regionName: '역삼동',
+      housingType: 'apartment' as const,
+      contractDate: `2026-07-0${index + 1}`,
+      contractType: 'jeonse' as const,
+      depositKrw: 790_000_000 + index * 5_000_000,
+      monthlyRentKrw: 0,
+      areaM2: 59.8,
+      complexName: '역삼센트럴',
+      source: 'live' as const
+    }));
+    const result = await detectPrecontractCheckSignals(
+      {
+        address: '서울 강남구 역삼동 역삼센트럴',
+        housingType: 'apartment',
+        depositKrw: 800_000_000,
+        monthlyRentKrw: 0,
+        areaM2: 60,
+        complexName: '역삼센트럴'
+      },
+      mockRentClient(
+        {
+          source: 'live',
+          requiresLiveData: false,
+          status: 'MATCHES_FOUND',
+          reasonCode: 'MATCHES_FOUND',
+          retryable: false,
+          searchComplete: true,
+          dataNotice: '임대차 조회 완료',
+          totalMatched: rentDeals.length,
+          deals: rentDeals,
+          disclaimer: 'test disclaimer'
+        },
+        {
+          source: 'live',
+          status: 'MATCHES_FOUND',
+          reasonCode: 'MATCHES_FOUND',
+          retryable: false,
+          nextActions: [],
+          searchComplete: true,
+          dataNotice: '매매 조회 완료',
+          totalMatched: saleCount,
+          deals: Array.from({ length: saleCount }, (_, index) => ({
+            id: `sale-high-deposit-${index}`,
+            lawdCode: '11680',
+            regionName: '역삼동',
+            housingType: 'apartment' as const,
+            contractDate: `2026-07-0${index + 1}`,
+            salePriceKrw: 990_000_000 + index * 10_000_000,
+            areaM2: 59.8,
+            complexName: '역삼센트럴',
+            source: 'live' as const
+          })),
+          disclaimer: 'test disclaimer'
+        }
+      )
+    );
+
+    expect(result.screeningOutcome).toBe('ADDITIONAL_VERIFICATION_REQUIRED');
+    if (expectsRatioSignal) {
+      expect(result.checkSignals.map((signal) => signal.code)).toContain('DEPOSIT_TO_SALE_PRICE_CHECK');
+      expect(result.checkSignals.map((signal) => signal.code)).not.toContain('SALE_PRICE_REFERENCE_LIMITED');
+    } else {
+      expect(result.checkSignals.map((signal) => signal.code)).toContain('SALE_PRICE_REFERENCE_LIMITED');
+      expect(result.checkSignals.map((signal) => signal.code)).not.toContain('DEPOSIT_TO_SALE_PRICE_CHECK');
+    }
+    expect(result.comparison?.salePriceAssessment.depositToMedianSalePricePercent).toBeGreaterThanOrEqual(80);
   });
 });

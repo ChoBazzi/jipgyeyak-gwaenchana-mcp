@@ -257,11 +257,7 @@ describe('LiveMolitRentClient', () => {
     expect(result.dataNotice).toContain('요청 기간 전체 건수는 아닙니다');
   });
 
-  it.each([
-    ['은마아파트', '은마'],
-    ['판교 오피스텔', '판교역 푸르지오시티'],
-    ['대우마리나', '대우마리나1']
-  ])('matches common complex-name variations: %s -> %s', async (requestedName, apiName) => {
+  it.each([['은마아파트', '은마']])('matches normalized complex-name variations: %s -> %s', async (requestedName, apiName) => {
     globalThis.fetch = vi.fn(
       async () =>
         new Response(
@@ -286,7 +282,58 @@ describe('LiveMolitRentClient', () => {
     expect(result.deals.map((deal) => deal.complexName)).toEqual([apiName]);
   });
 
-  it('does not match a shorter, different complex name contained in the requested name', async () => {
+  it('does not treat a location plus generic housing type as a specific complex name', async () => {
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          '<response><header><resultCode>000</resultCode></header><body><totalCount>1</totalCount><items><item><offiNm>판교역 푸르지오시티</offiNm><dealYear>2026</dealYear><dealMonth>7</dealMonth><dealDay>2</dealDay><deposit>20,000</deposit><monthlyRent>100</monthlyRent><excluUseAr>30</excluUseAr><sggCd>41135</sggCd><umdNm>백현동</umdNm></item></items></body></response>',
+          { status: 200 }
+        )
+    );
+    const client = new LiveMolitRentClient({ apiKey: 'key', baseUrl: 'https://apis.data.go.kr/1613000/' });
+
+    const result = await client.searchRentComparables({
+      lawdCode: '41135',
+      dealYmdFrom: '202607',
+      dealYmdTo: '202607',
+      housingType: 'officetel',
+      complexName: '판교 오피스텔',
+      limit: 20
+    });
+
+    expect(result.deals).toEqual([]);
+    expect(result.reasonCode).toBe('NO_COMPLEX_MATCH');
+  });
+
+  it('filters district results to the resolved legal dong before applying area filters', async () => {
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          `<response><header><resultCode>000</resultCode></header><body><totalCount>2</totalCount><items>
+            <item><aptNm>역삼센트럴</aptNm><dealYear>2026</dealYear><dealMonth>7</dealMonth><dealDay>1</dealDay><deposit>50,000</deposit><monthlyRent>0</monthlyRent><excluUseAr>60</excluUseAr><sggCd>11680</sggCd><umdNm>역삼동</umdNm></item>
+            <item><aptNm>대치센트럴</aptNm><dealYear>2026</dealYear><dealMonth>7</dealMonth><dealDay>2</dealDay><deposit>60,000</deposit><monthlyRent>0</monthlyRent><excluUseAr>60</excluUseAr><sggCd>11680</sggCd><umdNm>대치동</umdNm></item>
+          </items></body></response>`,
+          { status: 200 }
+        )
+    );
+    const client = new LiveMolitRentClient({ apiKey: 'key', baseUrl: 'https://apis.data.go.kr/1613000/' });
+
+    const result = await client.searchRentComparables({
+      lawdCode: '11680',
+      dealYmdFrom: '202607',
+      dealYmdTo: '202607',
+      housingType: 'apartment',
+      legalDongName: '역삼동',
+      areaM2: 60,
+      areaToleranceM2: 6,
+      limit: 20
+    });
+
+    expect(result.deals.map((deal) => deal.regionName)).toEqual(['역삼동']);
+    expect(result.filterStats?.afterLegalDong).toBe(1);
+  });
+
+  it('does not merge shorter or numbered-phase property names', async () => {
     globalThis.fetch = vi.fn(
       async () =>
         new Response(
@@ -308,7 +355,8 @@ describe('LiveMolitRentClient', () => {
       limit: 20
     });
 
-    expect(result.deals.map((deal) => deal.complexName)).toEqual(['대우마리나1']);
+    expect(result.deals).toEqual([]);
+    expect(result.reasonCode).toBe('NO_COMPLEX_MATCH');
   });
 
   it('filters jeonse and wolse deals separately when contractType is provided', async () => {
@@ -857,7 +905,7 @@ describe('FallbackMolitRentClient', () => {
     });
 
     expect(result).toMatchObject({
-      status: 'LIVE_DATA_UNAVAILABLE',
+      status: 'INVALID_REQUEST',
       reasonCode: 'INVALID_REQUEST',
       retryable: false
     });
@@ -883,7 +931,7 @@ describe('FallbackMolitRentClient', () => {
     expect(result.requiresLiveData).toBe(true);
     expect(result.deals).toEqual([]);
     expect(result.dataNotice).toContain('MOLIT_OPEN_DATA_API_KEY가 없어');
-    expect(result.dataNotice).toContain('실시간 신고자료를 조회할 수 없습니다');
+    expect(result.dataNotice).toContain('공공데이터 API 신고자료를 조회할 수 없습니다');
     expect(result.dataNotice).toContain('정보가 부족합니다');
   });
 });
