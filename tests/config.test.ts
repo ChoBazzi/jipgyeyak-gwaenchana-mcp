@@ -19,9 +19,9 @@ describe('loadConfig', () => {
     expect(config.molitApiTimeoutMs).toBe(DEFAULT_MOLIT_OPEN_DATA_TIMEOUT_MS);
     expect(config.molitApiTimeoutMs).toBe(5000);
     expect(config.molitTotalTimeoutMs).toBe(DEFAULT_MOLIT_OPEN_DATA_TOTAL_TIMEOUT_MS);
-    expect(config.molitTotalTimeoutMs).toBe(2800);
+    expect(config.molitTotalTimeoutMs).toBe(5000);
     expect(config.contractLookupTimeoutMs).toBe(DEFAULT_CONTRACT_LOOKUP_TIMEOUT_MS);
-    expect(config.contractLookupTimeoutMs).toBe(3000);
+    expect(config.contractLookupTimeoutMs).toBe(8000);
     expect(config.allowedOrigins).toEqual(['https://playmcp.kakao.com']);
     expect(config.mcpRateLimitPerMinute).toBe(DEFAULT_MCP_RATE_LIMIT_PER_MINUTE);
     expect(config.mcpMaxConcurrentRequests).toBe(DEFAULT_MCP_MAX_CONCURRENT_REQUESTS);
@@ -35,8 +35,8 @@ describe('loadConfig', () => {
     expect(loadConfig({ MOLIT_OPEN_DATA_TIMEOUT_MS: 'invalid' }).molitApiTimeoutMs).toBe(5000);
     expect(loadConfig({ MOLIT_OPEN_DATA_TIMEOUT_MS: '0' }).molitApiTimeoutMs).toBe(5000);
     expect(loadConfig({ MOLIT_OPEN_DATA_TOTAL_TIMEOUT_MS: '1800' }).molitTotalTimeoutMs).toBe(1800);
-    expect(loadConfig({ MOLIT_OPEN_DATA_TOTAL_TIMEOUT_MS: '9000' }).molitTotalTimeoutMs).toBe(3000);
-    expect(loadConfig({ CONTRACT_LOOKUP_TIMEOUT_MS: '9000' }).contractLookupTimeoutMs).toBe(3000);
+    expect(loadConfig({ MOLIT_OPEN_DATA_TOTAL_TIMEOUT_MS: '15000' }).molitTotalTimeoutMs).toBe(10000);
+    expect(loadConfig({ CONTRACT_LOOKUP_TIMEOUT_MS: '15000' }).contractLookupTimeoutMs).toBe(10000);
     expect(loadConfig({ MCP_RATE_LIMIT_PER_MINUTE: '5000' }).mcpRateLimitPerMinute).toBe(1000);
     expect(loadConfig({ MCP_MAX_CONCURRENT_REQUESTS: '500' }).mcpMaxConcurrentRequests).toBe(64);
   });

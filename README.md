@@ -83,11 +83,11 @@ MCP_HOST=0.0.0.0
 MOLIT_OPEN_DATA_API_KEY=
 MOLIT_OPEN_DATA_BASE_URL=https://apis.data.go.kr/1613000
 MOLIT_OPEN_DATA_TIMEOUT_MS=5000
-MOLIT_OPEN_DATA_TOTAL_TIMEOUT_MS=2800
+MOLIT_OPEN_DATA_TOTAL_TIMEOUT_MS=5000
 JUSO_API_KEY=
 JUSO_API_BASE_URL=https://business.juso.go.kr/addrlink/addrLinkApi.do
 JUSO_API_TIMEOUT_MS=3000
-CONTRACT_LOOKUP_TIMEOUT_MS=3000
+CONTRACT_LOOKUP_TIMEOUT_MS=8000
 MCP_ALLOWED_ORIGINS=https://playmcp.kakao.com
 MCP_RATE_LIMIT_PER_MINUTE=120
 MCP_MAX_CONCURRENT_REQUESTS=16
@@ -104,7 +104,7 @@ MCP_MAX_CONCURRENT_REQUESTS=16
 | `villa` | `/RTMSDataSvcRHRent/getRTMSDataSvcRHRent` | `/RTMSDataSvcRHTrade/getRTMSDataSvcRHTrade` |
 | `detachedMultiFamily` | `/RTMSDataSvcSHRent/getRTMSDataSvcSHRent` | `/RTMSDataSvcSHTrade/getRTMSDataSvcSHTrade` |
 
-live 요청은 `serviceKey`, `LAWD_CD`, `DEAL_YMD`, `pageNo`, `numOfRows` 파라미터를 사용합니다. 입력 기간은 최대 12개월, 반환 표본은 최대 20건이며 계약 비교는 최근 10건을 목표로 합니다. 전월세와 매매 조회는 주소 해석 뒤 같은 전체 마감시간 안에서 병렬 실행합니다. 최신 월부터 조회하고 표본이 부족하면 이전 월을 확장하며, 응답의 `totalCount`와 `numOfRows`를 확인해 페이지를 읽습니다. 목표 건수 확보 또는 마감시간 도달로 조기 종료하면 `searchComplete: false`와 실제 조회 월 수를 표시합니다. 표본이 전혀 없는 타임아웃만 `LIVE_DATA_UNAVAILABLE`로 처리합니다. 비정상 응답의 무한 요청을 막기 위해 월별 최대 20페이지로 제한합니다.
+live 요청은 `serviceKey`, `LAWD_CD`, `DEAL_YMD`, `pageNo`, `numOfRows` 파라미터를 사용합니다. 입력 기간은 최대 12개월, 반환 표본은 최대 20건이며 계약 비교는 최근 10건을 목표로 합니다. 전월세와 매매 조회는 주소 해석 뒤 같은 전체 마감시간 안에서 병렬 실행합니다. 최신 월부터 조회하고 표본이 부족하면 이전 월을 확장하며, 응답의 `totalCount`와 `numOfRows`를 확인해 페이지를 읽습니다. 목표 건수 확보 또는 마감시간 도달로 조기 종료하면 `searchComplete: false`와 실제 조회 월 수를 표시합니다. 표본이 전혀 없는 타임아웃만 `LIVE_DATA_UNAVAILABLE`로 처리합니다. 비정상 응답의 무한 요청을 막기 위해 월별 최대 20페이지로 제한합니다. 개별 API 요청과 국토부 전체 조회의 기본 마감시간은 5초, 주소 해석부터 계약 비교까지의 전체 마감시간은 8초이며 설정 가능한 상한은 10초입니다.
 
 단지명은 공백과 기호, `아파트`·`오피스텔` 같은 일반 주택 유형 표현을 정규화한 뒤 정확히 일치할 때만 사용합니다. `은마아파트`와 API의 `은마`는 일치하지만 `대우마리나`와 `대우마리나1`처럼 번호·차수가 다른 이름은 합치지 않습니다. `contractType`이 주어지면 전세와 월세 신고 사례를 분리하며, `compare_contract_terms`는 입력 월세가 0원이면 전세, 0원보다 크면 월세 표본만 사용합니다. API 키가 없거나 요청이 실패하면 결과에 `source: "unavailable"`, 실패 원인과 다음 행동이 포함되고, 조회 성공 후 조건 일치 결과가 0건이면 어느 필터 단계에서 제외됐는지 안내합니다.
 
@@ -128,11 +128,11 @@ MCP_HOST=0.0.0.0
 MOLIT_OPEN_DATA_API_KEY=<국토교통부 Open API 키>
 MOLIT_OPEN_DATA_BASE_URL=https://apis.data.go.kr/1613000
 MOLIT_OPEN_DATA_TIMEOUT_MS=5000
-MOLIT_OPEN_DATA_TOTAL_TIMEOUT_MS=2800
+MOLIT_OPEN_DATA_TOTAL_TIMEOUT_MS=5000
 JUSO_API_KEY=<도로명주소 API 키>
 JUSO_API_BASE_URL=https://business.juso.go.kr/addrlink/addrLinkApi.do
 JUSO_API_TIMEOUT_MS=3000
-CONTRACT_LOOKUP_TIMEOUT_MS=3000
+CONTRACT_LOOKUP_TIMEOUT_MS=8000
 MCP_ALLOWED_ORIGINS=https://playmcp.kakao.com
 MCP_RATE_LIMIT_PER_MINUTE=120
 MCP_MAX_CONCURRENT_REQUESTS=16

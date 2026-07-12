@@ -36,7 +36,7 @@ const MAX_PAGES_PER_MONTH = 20;
 const MAX_LIMIT = 20;
 const MONTH_CONCURRENCY = 3;
 const DEFAULT_REQUEST_TIMEOUT_MS = 5000;
-const DEFAULT_TOTAL_TIMEOUT_MS = 2800;
+const DEFAULT_TOTAL_TIMEOUT_MS = 5000;
 const GENERIC_COMPLEX_TERMS = /아파트|오피스텔|주상복합|연립주택|다세대주택|단독주택|다가구주택|빌라/gu;
 
 const ParsedSaleDealSchema = z.object({
