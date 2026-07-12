@@ -156,6 +156,7 @@ describe('resolveAddressRegion', () => {
 
     expect(result.source).toBe('local');
     expect(result.lawdCode).toBe('11680');
+    expect(result).toMatchObject({ lookupStatus: 'MATCHED', lookupReasonCode: 'LOCAL_MATCH_FOUND' });
     expect(result.dataNotice).toContain('JUSO_API_KEY가 없어');
     expect(result.dataNotice).toContain('내장 행정구역 키워드');
   });
@@ -179,6 +180,11 @@ describe('resolveAddressRegion', () => {
 
     expect(result.lawdCode).toBeNull();
     expect(result.candidates).toEqual([]);
+    expect(result).toMatchObject({
+      lookupStatus: 'LIVE_DATA_UNAVAILABLE',
+      lookupReasonCode: 'API_KEY_MISSING',
+      retryable: false
+    });
     expect(result.dataNotice).toContain('정보가 부족합니다');
   });
 });

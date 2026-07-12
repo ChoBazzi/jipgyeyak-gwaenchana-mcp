@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assertValidDealYmdRange, isValidDealYmd, subtractMonths, toDealYmd } from '../src/utils/date.js';
+import { assertValidDealYmdRange, countDealYmdMonths, isValidDealYmd, subtractMonths, toDealYmd } from '../src/utils/date.js';
 
 describe('date utilities', () => {
   it('clamps month-end subtraction to the last valid day of the target month', () => {
@@ -15,6 +15,8 @@ describe('date utilities', () => {
     expect(isValidDealYmd('202613')).toBe(false);
     expect(isValidDealYmd('20261')).toBe(false);
     expect(() => assertValidDealYmdRange('202601', '202612')).not.toThrow();
+    expect(countDealYmdMonths('202601', '202612')).toBe(12);
+    expect(() => assertValidDealYmdRange('202601', '202701')).toThrow('최대 12개월');
     expect(() => assertValidDealYmdRange('202613', '202613')).toThrow('YYYYMM');
     expect(() => assertValidDealYmdRange('202607', '202606')).toThrow('시작 월');
   });

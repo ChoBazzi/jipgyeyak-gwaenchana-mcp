@@ -140,6 +140,15 @@ function joinNotices(...notices: Array<string | undefined>): string {
   return notices.filter((notice): notice is string => Boolean(notice)).join(' ');
 }
 
+function unavailableAddressNextActions(reasonCode: string, retryable: boolean): string[] {
+  if (reasonCode === 'API_KEY_MISSING') {
+    return ['서비스 관리자에게 도로명주소 API 설정을 확인해 달라고 요청하세요.'];
+  }
+  return retryable
+    ? ['잠시 후 주소 조회를 다시 시도하세요.']
+    : ['도로명주소 API 설정과 응답 상태를 확인하세요.'];
+}
+
 function createJusoClientFromEnv(): JusoAddressClient {
   const config = loadConfig();
   return new FallbackJusoAddressClient({
@@ -152,11 +161,12 @@ function createJusoClientFromEnv(): JusoAddressClient {
 export async function resolveAddressRegion(
   address: string,
   _housingType?: HousingType,
-  jusoClient: JusoAddressClient = createJusoClientFromEnv()
+  jusoClient: JusoAddressClient = createJusoClientFromEnv(),
+  signal?: AbortSignal
 ): Promise<AddressResolution> {
   const normalizedAddress = normalizeAddress(address);
   const compactAddress = normalizedAddress.replace(/\s/g, '');
-  const jusoResult = await jusoClient.searchAddress(normalizedAddress);
+  const jusoResult = await jusoClient.searchAddress(normalizedAddress, signal);
   const localCandidates = findLocalCandidates(compactAddress);
 
   if (jusoResult.candidates.length > 0) {
@@ -169,6 +179,10 @@ export async function resolveAddressRegion(
         lawdCode: primary?.lawdCode ?? null,
         candidates: localCandidates,
         source: 'local',
+        lookupStatus: 'MATCHED',
+        lookupReasonCode: 'LOCAL_MATCH_FOUND',
+        retryable: false,
+        nextActions: ['도로명주소나 지번주소를 함께 입력해 주소 후보를 다시 확인하세요.'],
         dataNotice: joinNotices(
           jusoResult.dataNotice,
           '도로명주소 API 후보가 입력한 지역 의도와 달라 내장 행정구역 키워드 매핑을 우선했습니다. 더 정확한 비교를 위해 도로명주소나 지번주소를 함께 입력하세요.'
@@ -185,12 +199,28 @@ export async function resolveAddressRegion(
       lawdCode: primary?.lawdCode ?? null,
       candidates: jusoResult.candidates,
       source: 'juso',
+      lookupStatus: 'MATCHED',
+      lookupReasonCode: 'MATCHES_FOUND',
+      retryable: false,
+      nextActions: [],
       dataNotice: jusoResult.dataNotice,
       disclaimer: CONTRACT_CHECK_DISCLAIMER
     };
   }
 
   const primary = localCandidates[0] ?? null;
+  const lookupStatus = primary
+    ? 'MATCHED'
+    : jusoResult.status === 'LIVE_DATA_UNAVAILABLE'
+      ? 'LIVE_DATA_UNAVAILABLE'
+      : 'NO_MATCHES';
+  const lookupReasonCode = primary ? 'LOCAL_MATCH_FOUND' : jusoResult.reasonCode;
+  const retryable = primary ? false : jusoResult.retryable;
+  const nextActions = primary
+    ? ['도로명주소나 지번주소를 함께 입력해 주소 후보를 다시 확인하세요.']
+    : lookupStatus === 'LIVE_DATA_UNAVAILABLE'
+      ? unavailableAddressNextActions(lookupReasonCode, retryable)
+      : ['도로명주소, 지번주소 또는 시군구와 법정동을 포함해 다시 입력하세요.'];
 
   return {
     normalizedAddress,
@@ -198,6 +228,10 @@ export async function resolveAddressRegion(
     lawdCode: primary?.lawdCode ?? null,
     candidates: localCandidates,
     source: 'local',
+    lookupStatus,
+    lookupReasonCode,
+    retryable,
+    nextActions,
     dataNotice: primary ? joinNotices(jusoResult.dataNotice, ADDRESS_MATCH_NOTICE) : joinNotices(jusoResult.dataNotice, ADDRESS_INSUFFICIENT_NOTICE),
     disclaimer: CONTRACT_CHECK_DISCLAIMER
   };

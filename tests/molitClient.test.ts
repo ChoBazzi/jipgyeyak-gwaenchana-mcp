@@ -3,6 +3,14 @@ import { FallbackMolitRentClient, LiveMolitRentClient } from '../src/services/mo
 
 const originalFetch = globalThis.fetch;
 
+const filterStatsXml = `
+  <response><header><resultCode>000</resultCode></header><body><totalCount>4</totalCount><items>
+    <item><aptNm>은마</aptNm><dealYear>2026</dealYear><dealMonth>7</dealMonth><dealDay>1</dealDay><deposit>100,000</deposit><monthlyRent>0</monthlyRent><excluUseAr>59</excluUseAr><sggCd>11680</sggCd><umdNm>대치동</umdNm></item>
+    <item><aptNm>은마</aptNm><dealYear>2026</dealYear><dealMonth>7</dealMonth><dealDay>2</dealDay><deposit>120,000</deposit><monthlyRent>0</monthlyRent><excluUseAr>84</excluUseAr><sggCd>11680</sggCd><umdNm>대치동</umdNm></item>
+    <item><aptNm>다른단지</aptNm><dealYear>2026</dealYear><dealMonth>7</dealMonth><dealDay>3</dealDay><deposit>80,000</deposit><monthlyRent>0</monthlyRent><excluUseAr>59</excluUseAr><sggCd>11680</sggCd><umdNm>대치동</umdNm></item>
+    <item><aptNm>은마</aptNm><dealYear>2026</dealYear><dealMonth>7</dealMonth><dealDay>4</dealDay><deposit>10,000</deposit><monthlyRent>300</monthlyRent><excluUseAr>59</excluUseAr><sggCd>11680</sggCd><umdNm>대치동</umdNm></item>
+  </items></body></response>`;
+
 afterEach(() => {
   globalThis.fetch = originalFetch;
   vi.restoreAllMocks();
@@ -83,6 +91,32 @@ describe('LiveMolitRentClient', () => {
     expect(result.deals[0]?.complexName).toBe('은마');
   });
 
+  it('stops paging within a month once enough filtered comparables are collected', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const pageNo = new URL(String(input)).searchParams.get('pageNo');
+      return new Response(
+        `<response><header><resultCode>000</resultCode></header><body><pageNo>${pageNo}</pageNo><numOfRows>1</numOfRows><totalCount>100</totalCount><items><item><aptNm>은마</aptNm><dealYear>2026</dealYear><dealMonth>7</dealMonth><dealDay>1</dealDay><deposit>100,000</deposit><monthlyRent>0</monthlyRent><excluUseAr>76</excluUseAr><sggCd>11680</sggCd><umdNm>대치동</umdNm></item></items></body></response>`,
+        { status: 200 }
+      );
+    });
+    globalThis.fetch = fetchMock;
+    const client = new LiveMolitRentClient({ apiKey: 'key', baseUrl: 'https://apis.data.go.kr/1613000/' });
+
+    const result = await client.searchRentComparables({
+      lawdCode: '11680',
+      dealYmdFrom: '202607',
+      dealYmdTo: '202607',
+      housingType: 'apartment',
+      complexName: '은마',
+      limit: 1
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.deals).toHaveLength(1);
+    expect(result.searchComplete).toBe(false);
+    expect(result.dataNotice).toContain('요청 기간 전체 건수는 아닙니다');
+  });
+
   it('rejects an empty page that appears before the reported total count is exhausted', async () => {
     const requestedPages: string[] = [];
     globalThis.fetch = vi.fn(async (input: string | URL | Request) => {
@@ -133,6 +167,14 @@ describe('LiveMolitRentClient', () => {
         housingType: 'apartment'
       })
     ).rejects.toThrow('시작 월');
+    await expect(
+      client.searchRentComparables({
+        lawdCode: '11680',
+        dealYmdFrom: '202507',
+        dealYmdTo: '202607',
+        housingType: 'apartment'
+      })
+    ).rejects.toThrow('최대 12개월');
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -160,14 +202,59 @@ describe('LiveMolitRentClient', () => {
 
     expect(fetchMock.mock.calls.map(([url]) => new URL(String(url)).searchParams.get('DEAL_YMD'))).toEqual([
       '202607',
-      '202606',
-      '202605'
+      '202606'
     ]);
     expect(result.deals.map((deal) => deal.contractDate)).toEqual(['2026-07-01', '2026-06-01']);
     expect(result.searchComplete).toBe(false);
     expect(result.requestedMonthCount).toBe(4);
-    expect(result.searchedMonthCount).toBe(3);
+    expect(result.searchedMonthCount).toBe(2);
     expect(result.dataNotice).toContain('최신 월부터');
+  });
+
+  it('returns verified partial matches when the overall deadline expires during older-month expansion', async () => {
+    globalThis.fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const dealYmd = new URL(String(input)).searchParams.get('DEAL_YMD');
+      if (dealYmd === '202612') {
+        return new Response(
+          '<response><header><resultCode>000</resultCode></header><body><totalCount>1</totalCount><items><item><aptNm>은마</aptNm><dealYear>2026</dealYear><dealMonth>12</dealMonth><dealDay>1</dealDay><deposit>100,000</deposit><monthlyRent>0</monthlyRent><excluUseAr>76</excluUseAr><sggCd>11680</sggCd><umdNm>대치동</umdNm></item></items></body></response>',
+          { status: 200 }
+        );
+      }
+
+      return await new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        const rejectOnAbort = () => reject(signal?.reason ?? new DOMException('timed out', 'TimeoutError'));
+        if (signal?.aborted) return rejectOnAbort();
+        signal?.addEventListener('abort', rejectOnAbort, { once: true });
+      });
+    });
+    const client = new LiveMolitRentClient({
+      apiKey: 'key',
+      baseUrl: 'https://apis.data.go.kr/1613000/',
+      timeoutMs: 1000,
+      totalTimeoutMs: 30
+    });
+
+    const result = await client.searchRentComparables({
+      lawdCode: '11680',
+      dealYmdFrom: '202601',
+      dealYmdTo: '202612',
+      housingType: 'apartment',
+      complexName: '은마',
+      areaM2: 76,
+      limit: 10
+    });
+
+    expect(result).toMatchObject({
+      source: 'live',
+      status: 'MATCHES_FOUND',
+      reasonCode: 'MATCHES_FOUND',
+      searchComplete: false,
+      searchedMonthCount: 1,
+      totalMatched: 1
+    });
+    expect(result.deals).toHaveLength(1);
+    expect(result.dataNotice).toContain('요청 기간 전체 건수는 아닙니다');
   });
 
   it.each([
@@ -248,6 +335,104 @@ describe('LiveMolitRentClient', () => {
 
     expect(result.deals).toHaveLength(1);
     expect(result.deals[0]?.contractType).toBe('jeonse');
+  });
+
+  it('returns machine-readable status and counts after each comparable filter', async () => {
+    globalThis.fetch = vi.fn(async () => new Response(filterStatsXml, { status: 200 }));
+    const client = new LiveMolitRentClient({ apiKey: 'key', baseUrl: 'https://apis.data.go.kr/1613000/' });
+
+    const result = await client.searchRentComparables({
+      lawdCode: '11680',
+      dealYmdFrom: '202607',
+      dealYmdTo: '202607',
+      housingType: 'apartment',
+      contractType: 'jeonse',
+      complexName: '은마아파트',
+      areaM2: 60,
+      areaToleranceM2: 2,
+      limit: 20
+    });
+
+    expect(result).toMatchObject({
+      status: 'MATCHES_FOUND',
+      reasonCode: 'MATCHES_FOUND',
+      retryable: false,
+      filterStats: { raw: 4, afterContractType: 3, afterComplexName: 2, afterArea: 1 },
+      nextActions: []
+    });
+    expect(result.deals).toHaveLength(1);
+  });
+
+  it('explains which filter removed all otherwise available deals', async () => {
+    globalThis.fetch = vi.fn(async () => new Response(filterStatsXml, { status: 200 }));
+    const client = new LiveMolitRentClient({ apiKey: 'key', baseUrl: 'https://apis.data.go.kr/1613000/' });
+
+    const result = await client.searchRentComparables({
+      lawdCode: '11680',
+      dealYmdFrom: '202607',
+      dealYmdTo: '202607',
+      housingType: 'apartment',
+      contractType: 'jeonse',
+      complexName: '은마',
+      areaM2: 120,
+      areaToleranceM2: 2,
+      limit: 20
+    });
+
+    expect(result).toMatchObject({
+      status: 'NO_MATCHES',
+      reasonCode: 'NO_AREA_MATCH',
+      retryable: false,
+      filterStats: { raw: 4, afterContractType: 3, afterComplexName: 2, afterArea: 0 }
+    });
+    expect(result.nextActions).toContain('면적 허용 범위를 넓혀 다시 조회하세요.');
+  });
+
+  it.each([
+    {
+      title: 'the requested contract type has no matches',
+      xml: filterStatsXml.replace('<monthlyRent>300</monthlyRent>', '<monthlyRent>0</monthlyRent>'),
+      filters: { contractType: 'wolse' as const },
+      reasonCode: 'NO_CONTRACT_TYPE_MATCH',
+      filterStats: { raw: 4, afterContractType: 0, afterComplexName: 0, afterArea: 0 },
+      nextAction: '전세 또는 월세 조건이 맞는지 확인해 다시 조회하세요.'
+    },
+    {
+      title: 'the requested complex has no matches',
+      xml: filterStatsXml,
+      filters: { contractType: 'jeonse' as const, complexName: '없는단지' },
+      reasonCode: 'NO_COMPLEX_MATCH',
+      filterStats: { raw: 4, afterContractType: 3, afterComplexName: 0, afterArea: 0 },
+      nextAction: '단지명을 빼거나 공식 단지명으로 바꿔 다시 조회하세요.'
+    },
+    {
+      title: 'the region and period have no reported deals',
+      xml: '<response><header><resultCode>000</resultCode></header><body><totalCount>0</totalCount><items /></body></response>',
+      filters: {},
+      reasonCode: 'NO_REPORTED_DEALS',
+      filterStats: { raw: 0, afterContractType: 0, afterComplexName: 0, afterArea: 0 },
+      nextAction: '조회 기간을 넓혀 다시 조회하세요.'
+    }
+  ])('returns a specific no-match reason when $title', async ({ xml, filters, reasonCode, filterStats, nextAction }) => {
+    globalThis.fetch = vi.fn(async () => new Response(xml, { status: 200 }));
+    const client = new LiveMolitRentClient({ apiKey: 'key', baseUrl: 'https://apis.data.go.kr/1613000/' });
+
+    const result = await client.searchRentComparables({
+      lawdCode: '11680',
+      dealYmdFrom: '202607',
+      dealYmdTo: '202607',
+      housingType: 'apartment',
+      limit: 20,
+      ...filters
+    });
+
+    expect(result).toMatchObject({
+      status: 'NO_MATCHES',
+      reasonCode,
+      retryable: false,
+      filterStats
+    });
+    expect(result.nextActions).toContain(nextAction);
   });
 
   it('builds housing-type endpoint URLs from the service root and calls each requested month', async () => {
@@ -526,12 +711,15 @@ describe('FallbackMolitRentClient', () => {
     });
 
     expect(result.source).toBe('unavailable');
+    expect(result.status).toBe('LIVE_DATA_UNAVAILABLE');
+    expect(result.reasonCode).toBe('API_HTTP_ERROR');
+    expect(result.retryable).toBe(true);
     expect(result.deals).toEqual([]);
     expect(result.dataNotice).toContain('공공데이터 조회가 실패했습니다');
     expect(result.dataNotice).toContain('정보가 부족합니다');
   });
 
-  it('returns unavailable information when MOLIT returns an XML error resultCode', async () => {
+  it('treats the public-data NODATA resultCode as a successful empty search', async () => {
     globalThis.fetch = vi.fn(
       async () =>
         new Response(
@@ -561,11 +749,119 @@ describe('FallbackMolitRentClient', () => {
       limit: 20
     });
 
-    expect(result.source).toBe('unavailable');
+    expect(result.source).toBe('live');
+    expect(result.status).toBe('NO_MATCHES');
+    expect(result.reasonCode).toBe('NO_REPORTED_DEALS');
+    expect(result.retryable).toBe(false);
     expect(result.deals).toEqual([]);
-    expect(result.dataNotice).toContain('공공데이터 조회가 실패했습니다');
-    expect(result.dataNotice).toContain('실패 사유');
-    expect(result.dataNotice).toContain('resultCode 03');
+    expect(result.dataNotice).toContain('신고된 거래자료가 없습니다');
+  });
+
+  it('aborts the full lookup when its overall deadline is exceeded', async () => {
+    globalThis.fetch = vi.fn(
+      async (_input: string | URL | Request, init?: RequestInit) =>
+        await new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          const rejectOnAbort = () => reject(signal?.reason ?? new DOMException('timed out', 'TimeoutError'));
+          if (signal?.aborted) {
+            rejectOnAbort();
+            return;
+          }
+          signal?.addEventListener('abort', rejectOnAbort, { once: true });
+        })
+    );
+    const client = new FallbackMolitRentClient({
+      apiKey: 'key',
+      baseUrl: 'https://apis.data.go.kr/1613000',
+      timeoutMs: 1000,
+      totalTimeoutMs: 30
+    });
+
+    const startedAt = Date.now();
+    const result = await client.searchRentComparables({
+      lawdCode: '11680',
+      dealYmdFrom: '202601',
+      dealYmdTo: '202612',
+      housingType: 'apartment',
+      complexName: '없는단지'
+    });
+
+    expect(Date.now() - startedAt).toBeLessThan(300);
+    expect(result).toMatchObject({
+      source: 'unavailable',
+      status: 'LIVE_DATA_UNAVAILABLE',
+      reasonCode: 'API_TIMEOUT',
+      retryable: true
+    });
+  });
+
+  it('marks a request timeout as retryable', async () => {
+    globalThis.fetch = vi.fn(async () => {
+      throw new DOMException('request timed out', 'TimeoutError');
+    });
+    const client = new FallbackMolitRentClient({
+      apiKey: 'key',
+      baseUrl: 'https://apis.data.go.kr/1613000'
+    });
+
+    const result = await client.searchRentComparables({
+      lawdCode: '11680',
+      dealYmdFrom: '202607',
+      dealYmdTo: '202607',
+      housingType: 'apartment'
+    });
+
+    expect(result).toMatchObject({
+      status: 'LIVE_DATA_UNAVAILABLE',
+      reasonCode: 'API_TIMEOUT',
+      retryable: true,
+      nextActions: ['잠시 후 다시 시도하세요.']
+    });
+  });
+
+  it('marks an API authorization failure as non-retryable', async () => {
+    globalThis.fetch = vi.fn(async () => new Response('forbidden', { status: 403 }));
+    const client = new FallbackMolitRentClient({
+      apiKey: 'key',
+      baseUrl: 'https://apis.data.go.kr/1613000'
+    });
+
+    const result = await client.searchRentComparables({
+      lawdCode: '11680',
+      dealYmdFrom: '202607',
+      dealYmdTo: '202607',
+      housingType: 'apartment'
+    });
+
+    expect(result).toMatchObject({
+      status: 'LIVE_DATA_UNAVAILABLE',
+      reasonCode: 'API_AUTH_ERROR',
+      retryable: false
+    });
+    expect(result.nextActions).toContain('공공데이터 API 키의 활용신청 승인 상태와 호출 권한을 확인하세요.');
+  });
+
+  it('marks an invalid request range as non-retryable without calling the API', async () => {
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock;
+    const client = new FallbackMolitRentClient({
+      apiKey: 'key',
+      baseUrl: 'https://apis.data.go.kr/1613000'
+    });
+
+    const result = await client.searchRentComparables({
+      lawdCode: '11680',
+      dealYmdFrom: '202607',
+      dealYmdTo: '202606',
+      housingType: 'apartment'
+    });
+
+    expect(result).toMatchObject({
+      status: 'LIVE_DATA_UNAVAILABLE',
+      reasonCode: 'INVALID_REQUEST',
+      retryable: false
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('returns unavailable information when no API key is configured', async () => {
@@ -580,6 +876,10 @@ describe('FallbackMolitRentClient', () => {
     });
 
     expect(result.source).toBe('unavailable');
+    expect(result.status).toBe('LIVE_DATA_UNAVAILABLE');
+    expect(result.reasonCode).toBe('API_KEY_MISSING');
+    expect(result.retryable).toBe(false);
+    expect(result.nextActions).toContain('서비스 관리자에게 공공데이터 API 설정을 확인해 달라고 요청하세요.');
     expect(result.requiresLiveData).toBe(true);
     expect(result.deals).toEqual([]);
     expect(result.dataNotice).toContain('MOLIT_OPEN_DATA_API_KEY가 없어');

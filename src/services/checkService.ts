@@ -3,24 +3,46 @@ import {
   type CheckSignal,
   type ContractComparison,
   type ContractComparisonInput,
+  type ContractComparisonStatus,
   type PrecontractCheckResult
 } from '../domain/types.js';
 import type { MolitRentClient } from './molitClient.js';
 import { compareContractTerms } from './comparisonService.js';
 
+function effectiveComparisonStatus(comparison: ContractComparison): ContractComparisonStatus {
+  if (comparison.status) return comparison.status;
+  if (!comparison.addressResolution.lawdCode) return 'ADDRESS_UNRESOLVED';
+  if (comparison.comparableSource === 'unavailable') return 'LIVE_DATA_UNAVAILABLE';
+  return comparison.sampleCount > 0 ? 'COMPARED' : 'NO_MATCHES';
+}
+
 function buildSignals(comparison: ContractComparison): CheckSignal[] {
   const signals: CheckSignal[] = [];
+  const status = effectiveComparisonStatus(comparison);
 
-  if (comparison.addressResolution.candidates.length === 0) {
+  if (status === 'ADDRESS_UNRESOLVED' || status === 'ADDRESS_AMBIGUOUS') {
     signals.push({
       code: 'ADDRESS_MATCH_UNCERTAIN',
       label: '주소 매칭 확인 필요',
-      detail: '입력 주소를 법정동 코드로 해석할 정보가 부족합니다.',
+      detail:
+        status === 'ADDRESS_AMBIGUOUS'
+          ? `입력 주소와 일치하는 후보가 ${comparison.addressResolution.candidates.length}개라 하나를 확정하지 않았습니다.`
+          : '입력 주소를 법정동 코드로 해석할 정보가 부족합니다.',
       suggestedVerification: '도로명주소, 지번주소, 건축물대장 주소가 서로 일치하는지 확인하세요.'
     });
   }
 
-  if (comparison.sampleCount < 3) {
+  if (status === 'LIVE_DATA_UNAVAILABLE') {
+    signals.push({
+      code: 'LIVE_DATA_UNAVAILABLE',
+      label: '실시간 공공데이터 확인 필요',
+      detail: comparison.dataNotice || '국토교통부 공공데이터를 조회하지 못했습니다.',
+      suggestedVerification:
+        comparison.nextActions?.[0] ?? '잠시 후 다시 조회하고, 계속 실패하면 공공데이터 API 설정을 확인하세요.'
+    });
+  }
+
+  if ((status === 'COMPARED' || status === 'NO_MATCHES') && comparison.sampleCount < 3) {
     signals.push({
       code: 'LOW_SAMPLE_COUNT',
       label: '유사 거래 표본 수 부족',
@@ -30,7 +52,10 @@ function buildSignals(comparison: ContractComparison): CheckSignal[] {
   }
 
   const depositDiff = comparison.depositKrw.differencePercentFromMedian;
-  if (depositDiff !== null && Math.abs(depositDiff) >= 25) {
+  const rentDiff = comparison.monthlyRentKrw.differencePercentFromMedian;
+  const isWolse = comparison.monthlyRentKrw.input > 0;
+
+  if (!isWolse && depositDiff !== null && Math.abs(depositDiff) >= 25) {
     signals.push({
       code: 'DEPOSIT_OUTSIDE_COMPARABLE_RANGE',
       label: '보증금 차이 확인 필요',
@@ -39,13 +64,20 @@ function buildSignals(comparison: ContractComparison): CheckSignal[] {
     });
   }
 
-  const rentDiff = comparison.monthlyRentKrw.differencePercentFromMedian;
-  if (comparison.monthlyRentKrw.input > 0 && rentDiff !== null && Math.abs(rentDiff) >= 25) {
+  if (
+    isWolse &&
+    ((depositDiff !== null && Math.abs(depositDiff) >= 25) || (rentDiff !== null && Math.abs(rentDiff) >= 25))
+  ) {
+    const differences = [
+      depositDiff === null ? null : `보증금 ${depositDiff >= 0 ? '+' : ''}${depositDiff}%`,
+      rentDiff === null ? null : `월세 ${rentDiff >= 0 ? '+' : ''}${rentDiff}%`
+    ].filter((value): value is string => value !== null);
     signals.push({
-      code: 'MONTHLY_RENT_OUTSIDE_COMPARABLE_RANGE',
-      label: '월세 차이 확인 필요',
-      detail: `입력 월세가 유사 표본 중앙값 대비 ${rentDiff >= 0 ? '+' : ''}${rentDiff}%입니다.`,
-      suggestedVerification: '관리비, 옵션, 단기계약 여부, 전월세 전환 조건이 비교 표본과 다른지 확인하세요.'
+      code: 'WOLSE_TERMS_DIFFER_FROM_MEDIAN',
+      label: '월세 조건 조합 확인 필요',
+      detail: `입력 조건은 유사 표본 중앙값 대비 ${differences.join(', ')}입니다. 두 금액을 각각 비교한 참고값입니다.`,
+      suggestedVerification:
+        '보증금과 월세를 전월세전환율로 환산해 함께 비교하고 관리비, 옵션, 계약기간 차이도 확인하세요.'
     });
   }
 

@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_JUSO_API_BASE_URL,
+  DEFAULT_CONTRACT_LOOKUP_TIMEOUT_MS,
   DEFAULT_MOLIT_OPEN_DATA_BASE_URL,
+  DEFAULT_MOLIT_OPEN_DATA_TOTAL_TIMEOUT_MS,
   DEFAULT_MOLIT_OPEN_DATA_TIMEOUT_MS,
+  DEFAULT_MCP_MAX_CONCURRENT_REQUESTS,
+  DEFAULT_MCP_RATE_LIMIT_PER_MINUTE,
   loadConfig
 } from '../src/config.js';
 
@@ -14,6 +18,13 @@ describe('loadConfig', () => {
     expect(config.molitBaseUrl).toBe('https://apis.data.go.kr/1613000');
     expect(config.molitApiTimeoutMs).toBe(DEFAULT_MOLIT_OPEN_DATA_TIMEOUT_MS);
     expect(config.molitApiTimeoutMs).toBe(5000);
+    expect(config.molitTotalTimeoutMs).toBe(DEFAULT_MOLIT_OPEN_DATA_TOTAL_TIMEOUT_MS);
+    expect(config.molitTotalTimeoutMs).toBe(2800);
+    expect(config.contractLookupTimeoutMs).toBe(DEFAULT_CONTRACT_LOOKUP_TIMEOUT_MS);
+    expect(config.contractLookupTimeoutMs).toBe(3000);
+    expect(config.allowedOrigins).toEqual(['https://playmcp.kakao.com']);
+    expect(config.mcpRateLimitPerMinute).toBe(DEFAULT_MCP_RATE_LIMIT_PER_MINUTE);
+    expect(config.mcpMaxConcurrentRequests).toBe(DEFAULT_MCP_MAX_CONCURRENT_REQUESTS);
     expect(config.jusoApiBaseUrl).toBe(DEFAULT_JUSO_API_BASE_URL);
     expect(config.jusoApiBaseUrl).toBe('https://business.juso.go.kr/addrlink/addrLinkApi.do');
     expect(config.jusoApiTimeoutMs).toBe(3000);
@@ -23,6 +34,19 @@ describe('loadConfig', () => {
     expect(loadConfig({ MOLIT_OPEN_DATA_TIMEOUT_MS: '7500' }).molitApiTimeoutMs).toBe(7500);
     expect(loadConfig({ MOLIT_OPEN_DATA_TIMEOUT_MS: 'invalid' }).molitApiTimeoutMs).toBe(5000);
     expect(loadConfig({ MOLIT_OPEN_DATA_TIMEOUT_MS: '0' }).molitApiTimeoutMs).toBe(5000);
+    expect(loadConfig({ MOLIT_OPEN_DATA_TOTAL_TIMEOUT_MS: '1800' }).molitTotalTimeoutMs).toBe(1800);
+    expect(loadConfig({ MOLIT_OPEN_DATA_TOTAL_TIMEOUT_MS: '9000' }).molitTotalTimeoutMs).toBe(3000);
+    expect(loadConfig({ CONTRACT_LOOKUP_TIMEOUT_MS: '9000' }).contractLookupTimeoutMs).toBe(3000);
+    expect(loadConfig({ MCP_RATE_LIMIT_PER_MINUTE: '5000' }).mcpRateLimitPerMinute).toBe(1000);
+    expect(loadConfig({ MCP_MAX_CONCURRENT_REQUESTS: '500' }).mcpMaxConcurrentRequests).toBe(64);
+  });
+
+  it('loads only valid HTTP origins for DNS rebinding protection', () => {
+    expect(
+      loadConfig({
+        MCP_ALLOWED_ORIGINS: 'https://playmcp.kakao.com, http://localhost:3000,not-a-url,ftp://example.com'
+      }).allowedOrigins
+    ).toEqual(['https://playmcp.kakao.com', 'http://localhost:3000']);
   });
 
   it('uses deployment-friendly PORT and host defaults', () => {

@@ -5,6 +5,17 @@ export const CONTRACT_CHECK_DISCLAIMER =
 
 export type HousingType = 'apartment' | 'officetel' | 'villa' | 'detachedMultiFamily';
 export type ContractType = 'jeonse' | 'wolse';
+export type AddressLookupStatus = 'MATCHED' | 'NO_MATCHES' | 'LIVE_DATA_UNAVAILABLE';
+export type AddressLookupReasonCode =
+  | 'MATCHES_FOUND'
+  | 'LOCAL_MATCH_FOUND'
+  | 'NO_ADDRESS_MATCH'
+  | 'API_KEY_MISSING'
+  | 'API_AUTH_ERROR'
+  | 'API_TIMEOUT'
+  | 'API_HTTP_ERROR'
+  | 'API_RESPONSE_INVALID'
+  | 'API_REQUEST_FAILED';
 
 export interface RegionCandidate {
   regionName: string;
@@ -29,6 +40,10 @@ export interface AddressResolution {
   lawdCode: string | null;
   candidates: RegionCandidate[];
   source: 'local' | 'juso';
+  lookupStatus: AddressLookupStatus;
+  lookupReasonCode: AddressLookupReasonCode;
+  retryable: boolean;
+  nextActions: string[];
   dataNotice: string;
   disclaimer: string;
 }
@@ -47,7 +62,7 @@ export interface RentDeal {
   builtYear?: number;
   complexName?: string;
   source: 'live';
-  sourceNotice: string;
+  sourceNotice?: string;
 }
 
 export interface ComparableSearchInput {
@@ -60,11 +75,40 @@ export interface ComparableSearchInput {
   areaToleranceM2?: number;
   complexName?: string;
   limit?: number;
+  deadlineAtMs?: number;
+}
+
+export type ComparableSearchStatus = 'MATCHES_FOUND' | 'NO_MATCHES' | 'LIVE_DATA_UNAVAILABLE';
+
+export type ComparableReasonCode =
+  | 'MATCHES_FOUND'
+  | 'NO_REPORTED_DEALS'
+  | 'NO_CONTRACT_TYPE_MATCH'
+  | 'NO_COMPLEX_MATCH'
+  | 'NO_AREA_MATCH'
+  | 'API_KEY_MISSING'
+  | 'API_AUTH_ERROR'
+  | 'API_TIMEOUT'
+  | 'API_HTTP_ERROR'
+  | 'API_RESPONSE_INVALID'
+  | 'API_REQUEST_FAILED'
+  | 'INVALID_REQUEST';
+
+export interface ComparableFilterStats {
+  raw: number;
+  afterContractType: number;
+  afterComplexName: number;
+  afterArea: number;
 }
 
 export interface ComparableSearchResult {
   source: 'live' | 'unavailable';
   requiresLiveData: boolean;
+  status?: ComparableSearchStatus;
+  reasonCode?: ComparableReasonCode;
+  retryable?: boolean;
+  filterStats?: ComparableFilterStats;
+  nextActions?: string[];
   searchComplete?: boolean;
   requestedMonthCount?: number;
   searchedMonthCount?: number;
@@ -84,9 +128,23 @@ export interface ContractComparisonInput {
   complexName?: string;
 }
 
+export type ContractComparisonStatus =
+  | 'COMPARED'
+  | 'NO_MATCHES'
+  | 'ADDRESS_UNRESOLVED'
+  | 'ADDRESS_AMBIGUOUS'
+  | 'LIVE_DATA_UNAVAILABLE';
+
+export type ContractComparisonReasonCode = ComparableReasonCode | 'ADDRESS_UNRESOLVED' | 'ADDRESS_AMBIGUOUS';
+
 export interface ContractComparison {
   addressResolution: AddressResolution;
   comparableSource: 'live' | 'unavailable';
+  status?: ContractComparisonStatus;
+  reasonCode?: ContractComparisonReasonCode;
+  retryable?: boolean;
+  filterStats?: ComparableFilterStats;
+  nextActions?: string[];
   sampleCount: number;
   period: {
     from: string;

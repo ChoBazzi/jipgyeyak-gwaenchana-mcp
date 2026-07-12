@@ -1,4 +1,5 @@
 export const DEAL_YMD_PATTERN = /^\d{4}(0[1-9]|1[0-2])$/;
+export const MAX_DEAL_YMD_MONTHS = 12;
 
 export function toDealYmd(date: Date): string {
   const year = date.getUTCFullYear();
@@ -23,12 +24,28 @@ export function isValidDealYmd(value: string): boolean {
   return DEAL_YMD_PATTERN.test(value);
 }
 
+export function countDealYmdMonths(from: string, to: string): number {
+  if (!isValidDealYmd(from) || !isValidDealYmd(to)) {
+    throw new Error('조회 월은 유효한 YYYYMM 형식이어야 합니다.');
+  }
+  if (from > to) {
+    throw new Error('조회 시작 월은 종료 월보다 늦을 수 없습니다.');
+  }
+
+  const fromIndex = Number(from.slice(0, 4)) * 12 + Number(from.slice(4, 6)) - 1;
+  const toIndex = Number(to.slice(0, 4)) * 12 + Number(to.slice(4, 6)) - 1;
+  return toIndex - fromIndex + 1;
+}
+
 export function assertValidDealYmdRange(from: string, to: string): void {
   if (!isValidDealYmd(from) || !isValidDealYmd(to)) {
     throw new Error('조회 월은 유효한 YYYYMM 형식이어야 합니다.');
   }
   if (from > to) {
     throw new Error('조회 시작 월은 종료 월보다 늦을 수 없습니다.');
+  }
+  if (countDealYmdMonths(from, to) > MAX_DEAL_YMD_MONTHS) {
+    throw new Error(`조회 기간은 최대 ${MAX_DEAL_YMD_MONTHS}개월까지 가능합니다.`);
   }
 }
 

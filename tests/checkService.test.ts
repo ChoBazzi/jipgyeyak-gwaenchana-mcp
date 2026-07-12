@@ -60,10 +60,39 @@ describe('detectPrecontractCheckSignals', () => {
     );
 
     expect(result.checkSignals.map((signal) => signal.code)).toContain('LOW_SAMPLE_COUNT');
-    expect(result.checkSignals.map((signal) => signal.code)).toContain('DEPOSIT_OUTSIDE_COMPARABLE_RANGE');
+    expect(result.checkSignals.map((signal) => signal.code)).toContain('WOLSE_TERMS_DIFFER_FROM_MEDIAN');
+    expect(result.checkSignals.map((signal) => signal.code)).not.toContain('DEPOSIT_OUTSIDE_COMPARABLE_RANGE');
     expect(result.itemsToVerify).toContain('등기부등본의 소유자, 근저당권, 압류/가압류 등 권리관계');
     expect(JSON.stringify(result)).not.toContain('riskSignals');
     expect(JSON.stringify(result)).not.toContain('SEED');
     expect(result.disclaimer).toContain('법률, 금융, 세무 또는 투자 조언이 아니며');
+  });
+
+  it('reports live data unavailability instead of a low sample count', async () => {
+    delete process.env.JUSO_API_KEY;
+    const result = await detectPrecontractCheckSignals(
+      {
+        address: '서울특별시 강남구 역삼동',
+        housingType: 'apartment',
+        depositKrw: 500000000,
+        monthlyRentKrw: 0,
+        areaM2: 60
+      },
+      mockRentClient({
+        source: 'unavailable',
+        requiresLiveData: true,
+        status: 'LIVE_DATA_UNAVAILABLE',
+        reasonCode: 'API_TIMEOUT',
+        retryable: true,
+        nextActions: ['잠시 후 다시 시도하세요.'],
+        dataNotice: '공공데이터 요청 시간이 초과됐습니다.',
+        totalMatched: 0,
+        deals: [],
+        disclaimer: 'test disclaimer'
+      })
+    );
+
+    expect(result.checkSignals.map((signal) => signal.code)).toContain('LIVE_DATA_UNAVAILABLE');
+    expect(result.checkSignals.map((signal) => signal.code)).not.toContain('LOW_SAMPLE_COUNT');
   });
 });

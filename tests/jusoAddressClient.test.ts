@@ -9,7 +9,7 @@ afterEach(() => {
 });
 
 describe('LiveJusoAddressClient', () => {
-  it('searches Juso API and extracts lawdCode from bdMgtSn first', async () => {
+  it('uses the current admCd for MOLIT lookup when bdMgtSn contains a legacy district code', async () => {
     const fetchMock = vi.fn(
       async () =>
         new Response(
@@ -26,10 +26,10 @@ describe('LiveJusoAddressClient', () => {
                   jibunAddr: '경기도 부천시 중동 1170',
                   bdNm: '포도마을',
                   siNm: '경기도',
-                  sggNm: '부천시',
+                  sggNm: '부천시 원미구',
                   emdNm: '중동',
-                  admCd: '4119010900',
-                  bdMgtSn: '4119010900100011700000001'
+                  admCd: '4119210800',
+                  bdMgtSn: '4119510800100011700000001'
                 }
               ]
             }
@@ -55,17 +55,19 @@ describe('LiveJusoAddressClient', () => {
     expect(requestedUrl.searchParams.get('keyword')).toBe('부천 포도마을');
     expect(requestedUrl.searchParams.get('resultType')).toBe('json');
     expect(result.candidates[0]).toMatchObject({
-      lawdCode: '41190',
-      legalDongCode: '4119010900',
-      regionName: '경기도 부천시',
+      lawdCode: '41192',
+      legalDongCode: '4119210800',
+      regionName: '경기도 부천시 원미구',
       sido: '경기도',
-      sigungu: '부천시',
+      sigungu: '부천시 원미구',
       eupmyeondong: '중동',
       roadAddress: '경기도 부천시 원미구 조마루로 135',
       jibunAddress: '경기도 부천시 중동 1170',
       buildingName: '포도마을',
       source: 'juso'
     });
+    expect(result.candidates[0]?.matchReason).toContain('admCd');
+    expect(result).toMatchObject({ status: 'MATCHES_FOUND', reasonCode: 'MATCHES_FOUND', retryable: false });
     expect(result.dataNotice).toContain('도로명주소');
   });
 
@@ -105,6 +107,35 @@ describe('LiveJusoAddressClient', () => {
     expect(result.candidates[0]?.lawdCode).toBe('11680');
     expect(result.candidates[0]?.matchReason).toContain('admCd');
   });
+
+  it('distinguishes a successful address no-match from an API failure', async () => {
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            results: {
+              common: { errorCode: '0', errorMessage: '정상', totalCount: '0' },
+              juso: []
+            }
+          }),
+          { status: 200 }
+        )
+    );
+    const client = new LiveJusoAddressClient({
+      apiKey: 'juso-key',
+      baseUrl: 'https://business.juso.go.kr/addrlink/addrLinkApi.do',
+      timeoutMs: 3000
+    });
+
+    const result = await client.searchAddress('존재하지 않는 주소');
+
+    expect(result).toMatchObject({
+      candidates: [],
+      status: 'NO_MATCHES',
+      reasonCode: 'NO_ADDRESS_MATCH',
+      retryable: false
+    });
+  });
 });
 
 describe('FallbackJusoAddressClient', () => {
@@ -114,6 +145,11 @@ describe('FallbackJusoAddressClient', () => {
     const result = await client.searchAddress('부천 포도마을');
 
     expect(result.candidates).toEqual([]);
+    expect(result).toMatchObject({
+      status: 'LIVE_DATA_UNAVAILABLE',
+      reasonCode: 'API_KEY_MISSING',
+      retryable: false
+    });
     expect(result.dataNotice).toContain('JUSO_API_KEY가 없어');
   });
 
@@ -128,6 +164,11 @@ describe('FallbackJusoAddressClient', () => {
     const result = await client.searchAddress('부천 포도마을');
 
     expect(result.candidates).toEqual([]);
+    expect(result).toMatchObject({
+      status: 'LIVE_DATA_UNAVAILABLE',
+      reasonCode: 'API_HTTP_ERROR',
+      retryable: true
+    });
     expect(result.dataNotice).toContain('도로명주소 API 조회가 실패');
   });
 });

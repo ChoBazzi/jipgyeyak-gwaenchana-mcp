@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import {
   CONTRACT_CHECK_DISCLAIMER,
+  type ComparableFilterStats,
+  type ComparableReasonCode,
   type ComparableSearchInput,
   type ComparableSearchResult,
   type RentDeal
@@ -11,15 +13,68 @@ export interface MolitRentClient {
   searchRentComparables(input: ComparableSearchInput): Promise<ComparableSearchResult>;
 }
 
-function unavailableResult(message: string): ComparableSearchResult {
+interface MolitFailure {
+  reasonCode: ComparableReasonCode;
+  retryable: boolean;
+}
+
+class MolitRequestError extends Error {
+  constructor(
+    message: string,
+    readonly reasonCode: ComparableReasonCode,
+    readonly retryable: boolean
+  ) {
+    super(message);
+    this.name = 'MolitRequestError';
+  }
+}
+
+function unavailableResult(options: MolitFailure & { message: string; nextActions: string[] }): ComparableSearchResult {
   return {
     source: 'unavailable',
     requiresLiveData: true,
-    dataNotice: message,
+    status: 'LIVE_DATA_UNAVAILABLE',
+    reasonCode: options.reasonCode,
+    retryable: options.retryable,
+    nextActions: options.nextActions,
+    dataNotice: options.message,
     deals: [],
     totalMatched: 0,
     disclaimer: CONTRACT_CHECK_DISCLAIMER
   };
+}
+
+function classifyMolitFailure(error: unknown): MolitFailure {
+  if (error instanceof MolitRequestError) {
+    return { reasonCode: error.reasonCode, retryable: error.retryable };
+  }
+
+  if (error instanceof Error) {
+    if (error.name === 'TimeoutError' || error.name === 'AbortError') {
+      return { reasonCode: 'API_TIMEOUT', retryable: true };
+    }
+
+    if (error.message.includes('YYYYMM') || error.message.includes('시작 월')) {
+      return { reasonCode: 'INVALID_REQUEST', retryable: false };
+    }
+  }
+
+  return { reasonCode: 'API_REQUEST_FAILED', retryable: true };
+}
+
+function unavailableNextActions(reasonCode: ComparableReasonCode, retryable: boolean): string[] {
+  switch (reasonCode) {
+    case 'API_KEY_MISSING':
+      return ['서비스 관리자에게 공공데이터 API 설정을 확인해 달라고 요청하세요.'];
+    case 'API_AUTH_ERROR':
+      return ['공공데이터 API 키의 활용신청 승인 상태와 호출 권한을 확인하세요.'];
+    case 'INVALID_REQUEST':
+      return ['조회 기간과 입력 조건을 확인한 뒤 다시 요청하세요.'];
+    default:
+      return retryable
+        ? ['잠시 후 다시 시도하세요.']
+        : ['서비스 관리자에게 공공데이터 요청 설정과 응답 상태를 확인해 달라고 요청하세요.'];
+  }
 }
 
 const HOUSING_TYPE_ENDPOINTS = {
@@ -32,7 +87,9 @@ const HOUSING_TYPE_ENDPOINTS = {
 const MOLIT_PAGE_SIZE = 1000;
 const MAX_MOLIT_PAGES_PER_MONTH = 20;
 const MOLIT_MONTH_CONCURRENCY = 3;
+const MAX_COMPARABLE_LIMIT = 20;
 const DEFAULT_MOLIT_REQUEST_TIMEOUT_MS = 5000;
+const DEFAULT_MOLIT_TOTAL_TIMEOUT_MS = 2800;
 
 const ParsedXmlDealSchema = z.object({
   lawdCode: z.string(),
@@ -116,14 +173,16 @@ function formatContractDate(year: string, month: string, day: string): string {
 
 function assertMolitXmlSuccess(xml: string): void {
   if (!/^\s*(?:<\?xml[\s\S]*?\?>\s*)?<response(?:\s|>)/i.test(xml)) {
-    throw new Error('MOLIT API returned an invalid XML response');
+    throw new MolitRequestError('MOLIT API returned an invalid XML response', 'API_RESPONSE_INVALID', true);
   }
 
   const resultCode = getXmlField(xml, ['resultCode']);
-  if (!resultCode || resultCode === '000') return;
+  if (!resultCode || resultCode === '000' || resultCode === '03') return;
 
   const resultMsg = getXmlField(xml, ['resultMsg']);
-  throw new Error(`MOLIT API returned resultCode ${resultCode}${resultMsg ? `: ${resultMsg}` : ''}`);
+  const message = `MOLIT API returned resultCode ${resultCode}${resultMsg ? `: ${resultMsg}` : ''}`;
+  const isAuthError = ['20', '21', '22', '30', '31'].includes(resultCode);
+  throw new MolitRequestError(message, isAuthError ? 'API_AUTH_ERROR' : 'API_RESPONSE_INVALID', !isAuthError);
 }
 
 function parseMolitXmlDeals(xml: string): Array<z.infer<typeof ParsedXmlDealSchema>> {
@@ -206,41 +265,114 @@ function matchesComplexName(requestedName: string, actualName: string | undefine
   return actual.includes(requested);
 }
 
-function filterLiveDeals(input: ComparableSearchInput, deals: RentDeal[]): RentDeal[] {
+function filterLiveDeals(
+  input: ComparableSearchInput,
+  deals: RentDeal[]
+): { deals: RentDeal[]; filterStats: ComparableFilterStats } {
   const tolerance = input.areaToleranceM2 ?? 5;
+  const afterContractType = input.contractType
+    ? deals.filter((deal) => deal.contractType === input.contractType)
+    : deals;
+  const afterComplexName = input.complexName
+    ? afterContractType.filter((deal) => matchesComplexName(input.complexName ?? '', deal.complexName))
+    : afterContractType;
+  const afterArea =
+    input.areaM2 !== undefined
+      ? afterComplexName.filter((deal) => Math.abs(deal.areaM2 - input.areaM2!) <= tolerance)
+      : afterComplexName;
 
-  return deals.filter((deal) => {
-    if (input.contractType && deal.contractType !== input.contractType) return false;
-    if (input.areaM2 !== undefined && Math.abs(deal.areaM2 - input.areaM2) > tolerance) return false;
-    if (input.complexName && !matchesComplexName(input.complexName, deal.complexName)) return false;
-    return true;
-  });
+  return {
+    deals: afterArea,
+    filterStats: {
+      raw: deals.length,
+      afterContractType: afterContractType.length,
+      afterComplexName: afterComplexName.length,
+      afterArea: afterArea.length
+    }
+  };
+}
+
+function noMatchReason(input: ComparableSearchInput, stats: ComparableFilterStats): ComparableReasonCode {
+  if (stats.raw === 0) return 'NO_REPORTED_DEALS';
+  if (input.contractType && stats.afterContractType === 0) return 'NO_CONTRACT_TYPE_MATCH';
+  if (input.complexName && stats.afterComplexName === 0) return 'NO_COMPLEX_MATCH';
+  if (input.areaM2 !== undefined && stats.afterArea === 0) return 'NO_AREA_MATCH';
+  return 'NO_REPORTED_DEALS';
+}
+
+function noMatchNextActions(reasonCode: ComparableReasonCode): string[] {
+  switch (reasonCode) {
+    case 'NO_CONTRACT_TYPE_MATCH':
+      return ['전세 또는 월세 조건이 맞는지 확인해 다시 조회하세요.'];
+    case 'NO_COMPLEX_MATCH':
+      return ['단지명을 빼거나 공식 단지명으로 바꿔 다시 조회하세요.'];
+    case 'NO_AREA_MATCH':
+      return ['면적 허용 범위를 넓혀 다시 조회하세요.'];
+    default:
+      return ['조회 기간을 넓혀 다시 조회하세요.'];
+  }
+}
+
+function noMatchNotice(reasonCode: ComparableReasonCode, stats: ComparableFilterStats): string {
+  switch (reasonCode) {
+    case 'NO_CONTRACT_TYPE_MATCH':
+      return `국토교통부 Open API 조회는 성공했고 신고자료 ${stats.raw}건을 확인했지만 요청한 전세/월세 유형과 일치하는 자료가 없습니다.`;
+    case 'NO_COMPLEX_MATCH':
+      return `국토교통부 Open API 조회는 성공했고 계약 유형에 맞는 자료 ${stats.afterContractType}건을 확인했지만 요청한 단지명과 일치하는 자료가 없습니다.`;
+    case 'NO_AREA_MATCH':
+      return `국토교통부 Open API 조회는 성공했고 단지명 조건까지 맞는 자료 ${stats.afterComplexName}건을 확인했지만 요청 면적 범위와 일치하는 자료가 없습니다.`;
+    default:
+      return '국토교통부 Open API의 월별 전체 페이지 조회는 성공했지만 조회 기간과 지역에 신고된 거래자료가 없습니다.';
+  }
 }
 
 export class LiveMolitRentClient implements MolitRentClient {
   private readonly timeoutMs: number;
+  private readonly totalTimeoutMs: number;
 
   constructor(
     private readonly options: {
       apiKey: string;
       baseUrl: string;
       timeoutMs?: number;
+      totalTimeoutMs?: number;
     }
   ) {
     this.timeoutMs = options.timeoutMs ?? DEFAULT_MOLIT_REQUEST_TIMEOUT_MS;
+    this.totalTimeoutMs = options.totalTimeoutMs ?? DEFAULT_MOLIT_TOTAL_TIMEOUT_MS;
   }
 
-  private async fetchMonthDeals(input: ComparableSearchInput, dealYmd: string): Promise<RentDeal[]> {
+  private requestSignal(deadlineAtMs: number): AbortSignal {
+    const remainingMs = deadlineAtMs - Date.now();
+    if (remainingMs <= 0) {
+      throw new MolitRequestError('MOLIT API lookup exceeded its overall deadline', 'API_TIMEOUT', true);
+    }
+
+    return AbortSignal.timeout(Math.max(1, Math.min(this.timeoutMs, remainingMs)));
+  }
+
+  private async fetchMonthDeals(
+    input: ComparableSearchInput,
+    dealYmd: string,
+    deadlineAtMs: number,
+    targetLimit: number
+  ): Promise<{ deals: RentDeal[]; complete: boolean }> {
     const monthlyDeals: RentDeal[] = [];
 
     for (let pageNo = 1; pageNo <= MAX_MOLIT_PAGES_PER_MONTH; pageNo += 1) {
       const url = buildMolitUrl(this.options, input, dealYmd, pageNo);
       const response = await fetch(url, {
         headers: { Accept: 'application/xml, text/xml;q=0.9, */*;q=0.8' },
-        signal: AbortSignal.timeout(this.timeoutMs)
+        signal: this.requestSignal(deadlineAtMs)
       });
       if (!response.ok) {
-        throw new Error(`MOLIT API request failed with status ${response.status}`);
+        const isAuthError = response.status === 401 || response.status === 403;
+        const retryable = response.status === 408 || response.status === 429 || response.status >= 500;
+        throw new MolitRequestError(
+          `MOLIT API request failed with status ${response.status}`,
+          isAuthError ? 'API_AUTH_ERROR' : 'API_HTTP_ERROR',
+          isAuthError ? false : retryable
+        );
       }
 
       const page = parseMolitXmlPage(await response.text());
@@ -252,8 +384,7 @@ export class LiveMolitRentClient implements MolitRentClient {
             lawdCode: deal.lawdCode || input.lawdCode,
             housingType: input.housingType,
             contractType: deal.monthlyRentKrw > 0 ? 'wolse' : 'jeonse',
-            source: 'live',
-            sourceNotice: 'MOLIT_OPEN_DATA_API_KEY를 사용해 live API에서 조회한 결과입니다.'
+            source: 'live'
           })
         )
       );
@@ -263,39 +394,98 @@ export class LiveMolitRentClient implements MolitRentClient {
       const reachedReportedEnd = page.totalCount !== undefined && pageNo * effectivePageSize >= page.totalCount;
       const hasReportedMore = page.totalCount !== undefined && pageNo * effectivePageSize < page.totalCount;
       if (page.deals.length === 0 && hasReportedMore) {
-        throw new Error(`MOLIT API returned an empty page before totalCount was exhausted for ${dealYmd}`);
+        throw new MolitRequestError(
+          `MOLIT API returned an empty page before totalCount was exhausted for ${dealYmd}`,
+          'API_RESPONSE_INVALID',
+          true
+        );
       }
       const reachedObservedEnd = page.deals.length === 0 || (page.totalCount === undefined && page.deals.length < effectivePageSize);
 
-      if (reachedReportedEnd || reachedObservedEnd) return monthlyDeals;
+      if (reachedReportedEnd || reachedObservedEnd) return { deals: monthlyDeals, complete: true };
+      if (filterLiveDeals(input, monthlyDeals).deals.length >= targetLimit) {
+        return { deals: monthlyDeals, complete: false };
+      }
     }
 
-    throw new Error(`MOLIT API pagination exceeded ${MAX_MOLIT_PAGES_PER_MONTH} pages for ${dealYmd}`);
+    throw new MolitRequestError(
+      `MOLIT API pagination exceeded ${MAX_MOLIT_PAGES_PER_MONTH} pages for ${dealYmd}`,
+      'API_RESPONSE_INVALID',
+      true
+    );
   }
 
   async searchRentComparables(input: ComparableSearchInput): Promise<ComparableSearchResult> {
     assertValidDealYmdRange(input.dealYmdFrom, input.dealYmdTo);
-    const parsedDeals: RentDeal[] = [];
-    const months = listDealYmdMonths(input.dealYmdFrom, input.dealYmdTo).reverse();
     const requestedLimit = input.limit ?? 20;
-    let searchedMonthCount = 0;
-
-    for (let index = 0; index < months.length; index += MOLIT_MONTH_CONCURRENCY) {
-      const monthBatch = months.slice(index, index + MOLIT_MONTH_CONCURRENCY);
-      const batchDeals = await Promise.all(monthBatch.map((dealYmd) => this.fetchMonthDeals(input, dealYmd)));
-      parsedDeals.push(...batchDeals.flat());
-      searchedMonthCount += monthBatch.length;
-
-      if (filterLiveDeals(input, parsedDeals).length >= requestedLimit) break;
+    if (!Number.isInteger(requestedLimit) || requestedLimit < 1 || requestedLimit > MAX_COMPARABLE_LIMIT) {
+      throw new MolitRequestError(`반환 건수는 1~${MAX_COMPARABLE_LIMIT}건이어야 합니다.`, 'INVALID_REQUEST', false);
     }
 
-    const deals = filterLiveDeals(input, parsedDeals).sort((a, b) => b.contractDate.localeCompare(a.contractDate));
+    const ownDeadlineAtMs = Date.now() + this.totalTimeoutMs;
+    const deadlineAtMs = Math.min(input.deadlineAtMs ?? ownDeadlineAtMs, ownDeadlineAtMs);
+    const parsedDeals: RentDeal[] = [];
+    const months = listDealYmdMonths(input.dealYmdFrom, input.dealYmdTo).reverse();
+    let searchedMonthCount = 0;
+    let allSearchedMonthsComplete = true;
+
+    let index = 0;
+    while (index < months.length) {
+      if (Date.now() >= deadlineAtMs) {
+        if (filterLiveDeals(input, parsedDeals).deals.length > 0) {
+          allSearchedMonthsComplete = false;
+          break;
+        }
+        throw new MolitRequestError('MOLIT API lookup exceeded its overall deadline', 'API_TIMEOUT', true);
+      }
+      const matchesBeforeBatch = filterLiveDeals(input, parsedDeals).deals.length;
+      const batchSize =
+        index === 0 || matchesBeforeBatch >= Math.ceil(requestedLimit / 2) ? 1 : MOLIT_MONTH_CONCURRENCY;
+      const monthBatch = months.slice(index, index + batchSize);
+      const targetLimit = Math.max(1, requestedLimit - matchesBeforeBatch);
+      const settledResults = await Promise.allSettled(
+        monthBatch.map((dealYmd) => this.fetchMonthDeals(input, dealYmd, deadlineAtMs, targetLimit))
+      );
+      const batchResults = settledResults
+        .filter((result): result is PromiseFulfilledResult<{ deals: RentDeal[]; complete: boolean }> =>
+          result.status === 'fulfilled'
+        )
+        .map((result) => result.value);
+      parsedDeals.push(...batchResults.flatMap((result) => result.deals));
+      allSearchedMonthsComplete =
+        allSearchedMonthsComplete && batchResults.every((result) => result.complete);
+      searchedMonthCount += batchResults.length;
+      index += monthBatch.length;
+
+      const rejection = settledResults.find(
+        (result): result is PromiseRejectedResult => result.status === 'rejected'
+      );
+      if (rejection) {
+        const failure = classifyMolitFailure(rejection.reason);
+        if (failure.reasonCode === 'API_TIMEOUT' && filterLiveDeals(input, parsedDeals).deals.length > 0) {
+          allSearchedMonthsComplete = false;
+          break;
+        }
+        throw rejection.reason;
+      }
+
+      if (filterLiveDeals(input, parsedDeals).deals.length >= requestedLimit) break;
+    }
+
+    const filtered = filterLiveDeals(input, parsedDeals);
+    const deals = [...filtered.deals].sort((a, b) => b.contractDate.localeCompare(a.contractDate));
     const limitedDeals = deals.slice(0, requestedLimit);
-    const searchComplete = searchedMonthCount === months.length;
+    const searchComplete = searchedMonthCount === months.length && allSearchedMonthsComplete;
+    const reasonCode = limitedDeals.length > 0 ? 'MATCHES_FOUND' : noMatchReason(input, filtered.filterStats);
 
     return {
       source: 'live',
       requiresLiveData: false,
+      status: limitedDeals.length > 0 ? 'MATCHES_FOUND' : 'NO_MATCHES',
+      reasonCode,
+      retryable: false,
+      filterStats: filtered.filterStats,
+      nextActions: limitedDeals.length > 0 ? [] : noMatchNextActions(reasonCode),
       searchComplete,
       requestedMonthCount: months.length,
       searchedMonthCount,
@@ -304,7 +494,7 @@ export class LiveMolitRentClient implements MolitRentClient {
           ? searchComplete
             ? '국토교통부 Open API의 요청 기간 전체 페이지를 조회하고 지원 필드와 검색 조건을 검증한 뒤 반환했습니다.'
             : `국토교통부 Open API를 최신 월부터 ${searchedMonthCount}/${months.length}개월 조회해 최근 ${limitedDeals.length}건을 반환했습니다. 요청 기간 전체 건수는 아닙니다.`
-          : '국토교통부 Open API의 월별 전체 페이지 조회는 성공했지만 입력 조건에 맞는 유사 신고자료가 없습니다. 법정동, 기간, 면적 또는 단지명 조건을 넓혀 다시 확인해 주세요.',
+          : noMatchNotice(reasonCode, filtered.filterStats),
       deals: limitedDeals,
       totalMatched: deals.length,
       disclaimer: CONTRACT_CHECK_DISCLAIMER
@@ -315,30 +505,39 @@ export class LiveMolitRentClient implements MolitRentClient {
 export class FallbackMolitRentClient implements MolitRentClient {
   private readonly liveClient?: LiveMolitRentClient;
 
-  constructor(options: { apiKey?: string; baseUrl?: string; timeoutMs?: number }) {
+  constructor(options: { apiKey?: string; baseUrl?: string; timeoutMs?: number; totalTimeoutMs?: number }) {
     if (options.apiKey && options.baseUrl) {
       this.liveClient = new LiveMolitRentClient({
         apiKey: options.apiKey,
         baseUrl: options.baseUrl,
-        timeoutMs: options.timeoutMs
+        timeoutMs: options.timeoutMs,
+        totalTimeoutMs: options.totalTimeoutMs
       });
     }
   }
 
   async searchRentComparables(input: ComparableSearchInput): Promise<ComparableSearchResult> {
     if (!this.liveClient) {
-      return unavailableResult(
-        'MOLIT_OPEN_DATA_API_KEY가 없어 실시간 신고자료를 조회할 수 없습니다. 지금은 비교에 필요한 정보가 부족합니다.'
-      );
+      const reasonCode = 'API_KEY_MISSING';
+      return unavailableResult({
+        reasonCode,
+        retryable: false,
+        nextActions: unavailableNextActions(reasonCode, false),
+        message:
+          'MOLIT_OPEN_DATA_API_KEY가 없어 실시간 신고자료를 조회할 수 없습니다. 지금은 비교에 필요한 정보가 부족합니다.'
+      });
     }
 
     try {
       return await this.liveClient.searchRentComparables(input);
     } catch (error) {
+      const failure = classifyMolitFailure(error);
       const failureReason = error instanceof Error && error.message ? ` 실패 사유: ${error.message}` : '';
-      return unavailableResult(
-        `공공데이터 조회가 실패했습니다.${failureReason} 지금은 비교에 필요한 정보가 부족합니다. 잠시 후 다시 시도해 주세요.`
-      );
+      return unavailableResult({
+        ...failure,
+        nextActions: unavailableNextActions(failure.reasonCode, failure.retryable),
+        message: `공공데이터 조회가 실패했습니다.${failureReason} 지금은 비교에 필요한 정보가 부족합니다.${failure.retryable ? ' 잠시 후 다시 시도해 주세요.' : ''}`
+      });
     }
   }
 }
