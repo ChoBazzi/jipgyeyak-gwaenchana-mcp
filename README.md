@@ -33,7 +33,6 @@
 
 ![집계약괜찮아 MCP 동작 방식](docs/images/how-it-works.svg)
 
-[다이어그램 원본](docs/diagrams/how-it-works.mmd)
 
 주소 후보가 여러 개이거나 전용면적이 빠지면 임의로 추측하지 않고 사용자에게 필요한 정보를 다시 질문합니다.
 
