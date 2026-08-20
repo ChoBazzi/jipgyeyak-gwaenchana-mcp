@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1299.965 125.80000000000001" width="1299.965" height="125.80000000000001" style="--bg:#F8FAFC;--fg:#172033;--line:#64748B;--accent:#2563EB;--muted:#475569;--surface:#FFFFFF;--border:#94A3B8;background:var(--bg)">
+<style>
+  text { font-family: Pretendard, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif; }
+  .edge { stroke: #64748B !important; }
+  .node rect { fill: #FFFFFF !important; stroke: #94A3B8 !important; }
+  .node text { fill: #172033 !important; }
+  marker polygon { fill: #2563EB !important; stroke: #2563EB !important; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          var(--fg);
+    --_text-sec:      var(--muted, color-mix(in srgb, var(--fg) 60%, var(--bg)));
+    --_text-muted:    var(--muted, color-mix(in srgb, var(--fg) 40%, var(--bg)));
+    --_text-faint:    color-mix(in srgb, var(--fg) 25%, var(--bg));
+    --_line:          var(--line, color-mix(in srgb, var(--fg) 50%, var(--bg)));
+    --_arrow:         var(--accent, color-mix(in srgb, var(--fg) 85%, var(--bg)));
+    --_node-fill:     var(--surface, color-mix(in srgb, var(--fg) 3%, var(--bg)));
+    --_node-stroke:   var(--border, color-mix(in srgb, var(--fg) 20%, var(--bg)));
+    --_group-fill:    var(--bg);
+    --_group-hdr:     color-mix(in srgb, var(--fg) 5%, var(--bg));
+    --_inner-stroke:  color-mix(in srgb, var(--fg) 12%, var(--bg));
+    --_key-badge:     color-mix(in srgb, var(--fg) 10%, var(--bg));
+  }
+</style>
+<rect width="100%" height="100%" fill="#F8FAFC" />
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<polyline class="edge" data-from="Q" data-to="J" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="263.941,62.900000000000006 311.941,62.900000000000006" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="J" data-to="M" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="503.5729999999999,62.900000000000006 551.5729999999999,62.900000000000006" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="M" data-to="C" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="740.982,62.900000000000006 788.982,62.900000000000006" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="C" data-to="R" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="997.6569999999999,62.900000000000006 1045.657,62.900000000000006" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="node" data-id="Q" data-label="1. 계약 조건 입력
+주소 · 금액 · 주택 유형 · 면적" data-shape="rectangle">
+  <rect x="36" y="36" width="227.94099999999997" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="149.9705" y="62.900000000000006" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="149.9705" dy="-3.9000000000000012">1. 계약 조건 입력</tspan><tspan x="149.9705" dy="16.900000000000002">주소 · 금액 · 주택 유형 · 면적</tspan></text>
+</g>
+<g class="node" data-id="J" data-label="2. 주소 정규화
+법정동 · 공식 건물 후보" data-shape="rectangle">
+  <rect x="311.941" y="36" width="191.63199999999995" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="407.75699999999995" y="62.900000000000006" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="407.75699999999995" dy="-3.9000000000000012">2. 주소 정규화</tspan><tspan x="407.75699999999995" dy="16.900000000000002">법정동 · 공식 건물 후보</tspan></text>
+</g>
+<g class="node" data-id="M" data-label="3. 공공데이터 조회
+전월세 · 매매 신고자료" data-shape="rectangle">
+  <rect x="551.5729999999999" y="36" width="189.40899999999996" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="646.2774999999998" y="62.900000000000006" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="646.2774999999998" dy="-3.9000000000000012">3. 공공데이터 조회</tspan><tspan x="646.2774999999998" dy="16.900000000000002">전월세 · 매매 신고자료</tspan></text>
+</g>
+<g class="node" data-id="C" data-label="4. 유사 조건 비교
+동일 신고 건물 · 유사 면적" data-shape="rectangle">
+  <rect x="788.982" y="36" width="208.675" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="893.3195" y="62.900000000000006" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="893.3195" dy="-3.9000000000000012">4. 유사 조건 비교</tspan><tspan x="893.3195" dy="16.900000000000002">동일 신고 건물 · 유사 면적</tspan></text>
+</g>
+<g class="node" data-id="R" data-label="5. 계약 전 확인
+가격 위치 · 신호 · 질문 목록" data-shape="rectangle">
+  <rect x="1045.657" y="36" width="218.308" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="1154.811" y="62.900000000000006" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="1154.811" dy="-3.9000000000000012">5. 계약 전 확인</tspan><tspan x="1154.811" dy="16.900000000000002">가격 위치 · 신호 · 질문 목록</tspan></text>
+</g>
+</svg>

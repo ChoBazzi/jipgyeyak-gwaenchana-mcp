@@ -1,6 +1,7 @@
 {
   "name": "jipgyeyak-gwaenchana-mcp",
   "version": "0.1.0",
+  "license": "MIT",
   "description": "집계약괜찮아 PlayMCP TypeScript MCP server MVP",
   "type": "module",
   "private": true,
